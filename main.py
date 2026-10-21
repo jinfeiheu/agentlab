@@ -3,19 +3,16 @@
 import os
 import sys
 import uuid
-from pathlib import Path
 
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
+from config import DOCS_DIR
 from graph import SYSTEM_PROMPT, build_graph, build_simple_graph
 from models import build_chat_model
-from rag import build_retriever
+from rag import build_inmemory_retriever
 from tools import calculator, make_search_tool, send_report
-
-BASE_DIR = Path(__file__).resolve().parent
-KNOWLEDGE_PATH = BASE_DIR / "data" / "knowledge.md"
 
 HELP = """命令:
   /new    开启新会话(清空多轮记忆)
@@ -32,17 +29,17 @@ def ensure_prerequisites() -> None:
         raise SystemExit(
             "缺少 DEEPSEEK_API_KEY:请复制 .env.example 为 .env 并填入你的 DeepSeek Key。"
         )
-    if not KNOWLEDGE_PATH.exists():
-        raise SystemExit(f"找不到知识库文件:{KNOWLEDGE_PATH}")
+    if not DOCS_DIR.exists():
+        raise SystemExit(f"找不到语料目录:{DOCS_DIR}")
 
 
 def build_retriever_or_exit():
     """构建检索器,把 Ollama 连接错误转成可读提示。"""
     try:
-        return build_retriever(KNOWLEDGE_PATH)
+        return build_inmemory_retriever(DOCS_DIR)
     except Exception as exc:
         raise SystemExit(
-            "知识库构建失败,请确认 Ollama 已启动且已拉取 bge-m3。\n"
+            "语料索引构建失败,请确认 Ollama 已启动且已拉取 bge-m3。\n"
             f"原始错误:{exc}"
         ) from exc
 

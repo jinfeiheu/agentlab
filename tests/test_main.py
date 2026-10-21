@@ -6,29 +6,26 @@ from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 import main
 
 
-def test_ensure_prerequisites_requires_deepseek_key(monkeypatch, tmp_path):
+def test_ensure_prerequisites_requires_deepseek_key(monkeypatch):
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-    knowledge = tmp_path / "knowledge.md"
-    knowledge.write_text("x", encoding="utf-8")
-    monkeypatch.setattr(main, "KNOWLEDGE_PATH", knowledge)
     with pytest.raises(SystemExit) as exc:
         main.ensure_prerequisites()
     assert "DEEPSEEK_API_KEY" in str(exc.value)
 
 
-def test_ensure_prerequisites_requires_knowledge_file(monkeypatch, tmp_path):
+def test_ensure_prerequisites_requires_docs_dir(monkeypatch, tmp_path):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test")
-    monkeypatch.setattr(main, "KNOWLEDGE_PATH", tmp_path / "missing.md")
+    monkeypatch.setattr(main, "DOCS_DIR", tmp_path / "missing")
     with pytest.raises(SystemExit) as exc:
         main.ensure_prerequisites()
-    assert "知识库" in str(exc.value)
+    assert "语料" in str(exc.value)
 
 
 def test_build_retriever_or_exit_reports_ollama_failure(monkeypatch):
-    def broken(_path):
+    def broken(_docs_dir):
         raise RuntimeError("connection refused")
 
-    monkeypatch.setattr(main, "build_retriever", broken)
+    monkeypatch.setattr(main, "build_inmemory_retriever", broken)
     with pytest.raises(SystemExit) as exc:
         main.build_retriever_or_exit()
     assert "Ollama" in str(exc.value)

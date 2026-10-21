@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Python `>=3.10`，实际 3.12；依赖用 `uv` 管理。
-- 语料冻结：`data/docs/*.md` 8 篇，约 50 个 chunk；`eval/golden.jsonl` 24 条（4 条不可回答）；closed-book。
+- 语料冻结：`data/docs/*.md` 8 篇，约 50–55 个 chunk；`eval/golden.jsonl` 27 条（4 条不可回答）；closed-book。
 - 3 个合成用户（alice/bob/carol）；`user_id` 只从服务端 HMAC token 解析，不能由请求体指定。
 - API 的 LangGraph `thread_id` 必须为 `f"{user_id}:{session_id}"`；长期记忆命名空间为 `("user", user_id)`。
 - 可观测性使用标准 OpenTelemetry + OpenInference，导出到本地 Phoenix；应用不依赖 `arize-phoenix` 包。Phoenix 用 `uvx --from arize-phoenix phoenix serve` 单独运行。
@@ -210,7 +210,7 @@ Expected: 输出 `缺少 DEEPSEEK_API_KEY...`，退出码 1。
 - Consumes: `config.DOCS_DIR`、`config.GOLDEN_PATH`
 - Produces:
   - `rag.load_documents(docs_dir: Path) -> list[Document]`
-  - `rag.split_documents(docs: list[Document], chunk_size: int = 400, chunk_overlap: int = 60) -> list[Document]`
+  - `rag.split_documents(docs: list[Document], chunk_size: int = 400, chunk_overlap: int = 100) -> list[Document]`
   - `rag.build_inmemory_retriever(docs_dir: Path, embeddings: Embeddings | None = None) -> BaseRetriever`
   - `eval.data.GoldenItem`（Pydantic：`id, question, answerable, expected_sources, relevant_chunk_ids, key_points, expected_tools`）
   - `eval.data.load_golden(path: Path) -> list[GoldenItem]`
@@ -233,9 +233,9 @@ def test_split_documents_assigns_stable_chunk_ids():
 
 def test_golden_has_24_cases_and_4_unanswerable():
     items = load_golden(GOLDEN_PATH)
-    assert len(items) == 24
+    assert len(items) == 27
     assert sum(not x.answerable for x in items) == 4
-    assert len({x.id for x in items}) == 24
+    assert len({x.id for x in items}) == 27
 
 def test_golden_sources_exist():
     for item in load_golden(GOLDEN_PATH):
@@ -250,7 +250,7 @@ Expected: FAIL（`data/docs`/`eval/golden.jsonl` 不存在或函数缺失）。
 
 - [ ] **Step 3: 写 8 篇语料**
 
-主题：`01-langchain`、`02-langgraph`、`03-rag`、`04-eval`、`05-observability`、`06-mcp`、`07-security`、`08-memory-context`。每篇 600–900 字，`##` 小节；内容与真实技术栈一致。现有 `data/knowledge.md` 可作为素材，但 docs 是新冻结语料。
+主题：`01-langchain`、`02-langgraph`、`03-rag`、`04-eval`、`05-observability`、`06-mcp`、`07-security`、`08-memory-context`。每篇 600–900 字，`##` 小节；内容与真实技术栈一致。现有技术栈说明可作为素材，但 docs 是新冻结语料。
 
 - [ ] **Step 4: 实现 `rag.load_documents` / `split_documents` / `build_inmemory_retriever`**
 
@@ -259,7 +259,7 @@ Expected: FAIL（`data/docs`/`eval/golden.jsonl` 不存在或函数缺失）。
 - `build_inmemory_retriever` 用 `build_embeddings()` + `InMemoryVectorStore.from_documents`，返回 `store.as_retriever(search_kwargs={"k": RAG_TOP_K})`。
 - `format_docs` 输出 `[来源:{source}#{section}]`。
 
-- [ ] **Step 5: 写 24 条 golden**
+- [ ] **Step 5: 写 27 条 golden**
 
 每条形如：
 
@@ -420,7 +420,7 @@ Expected: PASS（使用 fake graph/retriever/judge，不调 API）。
 - [ ] **Step 6: 真实基线评测（需要 DeepSeek Key）**
 
 Run: `uv run python -m eval.run_eval --output eval/results/baseline.md`
-Expected: 生成 `eval/results/baseline.md`，包含 24 条结果与汇总指标；若 API 失败，报告仍应生成并记录错误。
+Expected: 生成 `eval/results/baseline.md`，包含 27 条结果与汇总指标；若 API 失败，报告仍应生成并记录错误。
 
 ---
 
@@ -747,7 +747,7 @@ RUN_INTEGRATION=1 uv run pytest tests/test_ingest.py -q -m integration
 uv run python ingest.py --reset
 ```
 
-Expected: 单元 PASS；集成 PASS；ingest 打印约 50 个 chunks。
+Expected: 单元 PASS；集成 PASS；ingest 打印约 50–55 个 chunks。
 
 ---
 

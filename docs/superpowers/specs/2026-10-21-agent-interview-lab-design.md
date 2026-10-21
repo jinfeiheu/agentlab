@@ -33,7 +33,7 @@
 - 模型：DeepSeek（对话/裁判），Ollama `bge-m3`（嵌入），Ollama `qwen3:8b`（可选 fallback）。
 - Docker daemon 可用；无 `docker compose` 插件；Docker Hub 直连超时，使用 `docker.m.daocloud.io` 镜像。
 - 无 LangSmith Key；可观测性使用本地 **Arize Phoenix**（OpenTelemetry），不依赖云 Key。
-- 语料：以现有 `data/knowledge.md` 为基础扩写为 **8 篇技术栈文档（约 50 个 chunk）**，作为阶段 1/3 的冻结语料；golden set **24 条（含 4 条不可回答）**，closed-book，标签由实现者生成、用户抽查。
+- 语料：以现有技术栈说明为基础扩写为 **8 篇技术栈文档（约 50–55 个 chunk）**，作为阶段 1/3 的冻结语料；golden set **27 条（含 4 条不可回答）**，closed-book，标签由实现者生成、用户抽查。
 - 身份：**3 个合成用户**（user_a/user_b/user_c），服务端登录后签发简单 HMAC token；API 从 token 解析 `user_id`，客户端不能自选。
 - 用户界面/注释使用中文；代码量优先，不追求抽象层级。
 
@@ -62,8 +62,8 @@ Postgres + pgvector        Phoenix（trace UI）        eval harness
 ### 阶段 1：评测 + 可观测
 
 **代码**
-- `eval/golden.jsonl`：24 条中文问题（含 4 条语料外/不可回答），含期望来源、相关 chunk、关键点、期望工具；closed-book（只依据检索片段回答，找不到就说不知道）。
-- 语料：`data/docs/*.md` 8 篇技术栈文档（由现有 knowledge.md 扩写），约 50 个 chunk，阶段 1 冻结；标签由实现者生成，用户抽查。
+- `eval/golden.jsonl`：27 条中文问题（含 4 条语料外/不可回答），含期望来源、相关 chunk、关键点、期望工具；closed-book（只依据检索片段回答，找不到就说不知道）。
+- 语料：`data/docs/*.md` 8 篇技术栈文档（由现有技术栈说明扩写），约 50–55 个 chunk，阶段 1 冻结；标签由实现者生成，用户抽查。
 - `eval/judge.py`：DeepSeek + Pydantic 结构化输出，评 correctness / faithfulness / citation_support。
 - `eval/run_eval.py`：跑 golden set，输出 Markdown + JSON 报告；指标含任务成功率、工具选择准确率、引用支持率、P50/P95 延迟、单任务成本。
 - `eval/retrieval_metrics.py`：Recall@k、MRR、nDCG@k（纯 Python）。
@@ -193,7 +193,7 @@ langchain-demo/
 - **不新增前端框架**：一个 HTML 文件 + fetch。
 - **3 用户 demo 隔离，而不是完整多租户**：用 stdlib HMAC 签发/校验 token，服务端绑定 `user_id`；不引入 OAuth/JWT 库，但能讲清身份信任边界。
 - **MCP 只暴露公共 `search_docs`**：私有 ticket 留在本地工具，通过 runtime context 注入 `user_id`，避免模型伪造身份。
-- **语料冻结**：8 篇技术栈文档、24 条 golden（含 4 条不可回答），阶段 1 基线与阶段 3 对比使用同一份；标签由实现者生成，用户抽查。
+- **语料冻结**：8 篇技术栈文档、27 条 golden（含 4 条不可回答），阶段 1 基线与阶段 3 对比使用同一份；标签由实现者生成，用户抽查。
 - **与 `bank-cs-agent` 保持独立**：不复用其银行语料/用户/评测集，避免两个项目的目录、端口、DB 和身份模型耦合。
 
 ## 依赖（按阶段分组）
@@ -210,7 +210,7 @@ langchain-demo/
 - Phoenix 与 LangGraph/LangChain 的自动/手动埋点 API 版本兼容性；失败则退化为 JSONL trace + 简单 HTML 查看器。
 - `langchain-postgres` 的 PGVector 与 `langgraph-checkpoint-postgres` 的异步接口；实现前先用小脚本验证。
 - MCP 适配器 API 变动；必要时直接用官方 `mcp` client 手写工具调用。
-- DeepSeek judge 的一致性/成本；golden set 控制在 20–24 条，temperature=0，结果缓存。
+- DeepSeek judge 的一致性/成本；golden set 控制在 24–27 条（当前 27 条），temperature=0，结果缓存。
 - Docker Hub 不可直连；镜像通过 `docker.m.daocloud.io`，README 说明可替换。
 - 中文 BM25 依赖 jieba 分词；如果效果不好，对比“字符 n-gram + BM25”作为备选。
 - demo 身份不是生产方案：README 明确说明生产应使用 OAuth/OIDC/JWT、短期 token、服务端会话和 RBAC；本项目只演示“客户端不能自选 user_id + 资源 owner 校验”。

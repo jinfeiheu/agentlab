@@ -1,16 +1,20 @@
 # LangChain × LangGraph 终端问答机器人
 
-一个约 350 行的学习型示例：在终端里运行的中文问答机器人。它用一条主链路把 LangChain / LangGraph 的核心组件串起来：模型接入、Prompt/LCEL、RAG、工具调用、状态图、Checkpointer、流式输出、Human-in-the-loop，以及 LangSmith 的开关方式。
+一个数百行的学习型示例：在终端里运行的中文问答机器人。它用一条主链路把 LangChain / LangGraph 的核心组件串起来：模型接入、Prompt/LCEL、RAG、工具调用、状态图、Checkpointer、流式输出、Human-in-the-loop，以及 LangSmith 的开关方式。
 
 ## 目录结构
 
 ```
 langchain-demo/
-├── main.py            # 配置 / LangGraph 图 / 流式渲染 / CLI
-├── rag.py             # 加载 → 切分 → bge-m3 嵌入 → 向量库 → 检索
+├── main.py            # CLI 入口 / 流式渲染 / 错误处理
+├── graph.py           # 单 Agent 图构建(SYSTEM_PROMPT / 两种写法)
+├── models.py          # 对话、嵌入、裁判模型工厂
+├── config.py          # 环境变量集中管理
+├── rag.py             # 目录加载 → 标题切分 → bge-m3 → 向量库 → 检索
 ├── tools.py           # 计算器 / 知识库检索 / 发送报告(HITL)
-├── data/knowledge.md  # 示例知识库(内容就是这套技术栈说明)
-├── tests/             # 20 个离线测试
+├── data/docs/         # 8 篇冻结技术栈语料
+├── eval/              # 27 条 golden set 与评测工具
+├── tests/             # 29 个离线测试
 ├── pyproject.toml
 ├── .env.example
 └── README.md
@@ -88,12 +92,12 @@ uv run pytest -v
 | 短期记忆 | `main.py` 的 `main()` | `InMemorySaver()` + `thread_id` |
 | Human-in-the-loop | `tools.py` 的 `send_report()`;`main.py` 的 `run_turn()` | 工具内 `interrupt()`;CLI 用 `Command(resume=...)` 恢复 |
 | 流式输出 | `main.py` 的 `run_turn()` | `stream_mode=["messages", "updates"]` |
-| 文档加载与切分 | `rag.py` 的 `load_document()` / `split_documents()` | 读取 Markdown,按中文标点切块 |
-| 嵌入 | `rag.py` 的 `build_retriever()` | `OllamaEmbeddings(model="bge-m3")`,1024 维 |
-| 向量库 | `rag.py` 的 `build_retriever()` | `InMemoryVectorStore` |
-| 检索 | `rag.py` 的 `build_retriever()` | `store.as_retriever(search_kwargs={"k": ...})` |
+| 文档加载与切分 | `rag.py` 的 `load_documents()` / `split_documents()` | 按 Markdown 标题切节,再按中文标点递归切块 |
+| 嵌入 | `rag.py` 的 `build_inmemory_retriever()` | `OllamaEmbeddings(model="bge-m3")`,1024 维 |
+| 向量库 | `rag.py` 的 `build_inmemory_retriever()` | `InMemoryVectorStore` |
+| 检索 | `rag.py` 的 `build_inmemory_retriever()` | `store.as_retriever(search_kwargs={"k": ...})` |
 | Agentic RAG | `tools.py` 的 `make_search_tool()` | 检索封装成工具,由模型决定何时调用 |
-| 高层 Agent API | `main.py` 的 `build_simple_graph()` | `create_agent(...)`,内部同样是 LangGraph |
+| 高层 Agent API | `graph.py` 的 `build_simple_graph()` | `create_agent(...)`,内部同样是 LangGraph |
 | 观测 | `.env.example` 的 `LANGSMITH_*` | 有 Key 时设 `LANGSMITH_TRACING=true` 即可,无需改代码 |
 | 启动错误处理 | `main.py` 的 `ensure_prerequisites()` / `build_retriever_or_exit()` | 缺 Key、Ollama 不可用时给出中文提示 |
 
@@ -112,7 +116,7 @@ uv run pytest -v
 
 | 想试什么 | 改哪里 |
 |---|---|
-| 改变回答风格 | `main.py` 的 `SYSTEM_PROMPT` |
+| 改变回答风格 | `graph.py` 的 `SYSTEM_PROMPT` |
 | 改变切块大小 | `rag.py` 的 `split_documents()` 默认 `chunk_size` / `chunk_overlap` |
 | 改变检索条数 | `.env` 的 `RAG_TOP_K` |
 | 加一个工具 | 在 `tools.py` 写 `@tool`,再把它加进 `main.py` 的 `tools` 列表 |
