@@ -79,14 +79,14 @@ def make_search_tool(retriever: BaseRetriever) -> BaseTool:
     """把 retriever 封装成 agent 可调用的检索工具。"""
 
     @tool
-    def search_knowledge(query: str) -> str:
+    def search_docs(query: str) -> str:
         """从本地知识库检索 LangChain/LangGraph 相关资料。"""
         docs = retriever.invoke(query)
         if not docs:
             return "知识库中没有找到相关内容。"
         return format_docs(docs)
 
-    return search_knowledge
+    return search_docs
 
 
 @tool

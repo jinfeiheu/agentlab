@@ -1,36 +1,21 @@
-"""LangChain × LangGraph 学习示例:手写 StateGraph 与 create_agent 两种写法。"""
+"""LangChain × LangGraph 学习示例:命令行入口。"""
 
 import os
 import sys
 import uuid
 from pathlib import Path
 
-from dotenv import load_dotenv
-from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_deepseek import ChatDeepSeek
 from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.graph import START, MessagesState, StateGraph
-from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.types import Command
 
+from graph import SYSTEM_PROMPT, build_graph, build_simple_graph
+from models import build_chat_model
 from rag import build_retriever
 from tools import calculator, make_search_tool, send_report
 
-load_dotenv()
-
 BASE_DIR = Path(__file__).resolve().parent
 KNOWLEDGE_PATH = BASE_DIR / "data" / "knowledge.md"
-MODEL_NAME = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
-
-SYSTEM_PROMPT = """你是一个中文技术问答助手,回答要简洁、准确。
-
-工具使用规则:
-1. 回答 LangChain、LangGraph、RAG、Agent 等相关问题时,先调用 search_knowledge 检索本地知识库,并基于检索结果回答;引用时注明来源。
-2. 需要算术时调用 calculator,不要心算。
-3. 用户要求发送报告时,把要发送的内容传给 send_report;该工具会请求人工确认。
-"""
 
 HELP = """命令:
   /new    开启新会话(清空多轮记忆)
@@ -60,36 +45,6 @@ def build_retriever_or_exit():
             "知识库构建失败,请确认 Ollama 已启动且已拉取 bge-m3。\n"
             f"原始错误:{exc}"
         ) from exc
-
-
-def build_graph(model, tools, checkpointer=None):
-    """手写 LangGraph:agent 与 tools 循环,直到模型不再调用工具。"""
-    llm = model.bind_tools(tools)
-    prompt = ChatPromptTemplate.from_messages(
-        [("system", SYSTEM_PROMPT), MessagesPlaceholder("messages")]
-    )
-
-    def agent(state: MessagesState):
-        response = (prompt | llm).invoke({"messages": state["messages"]})
-        return {"messages": [response]}
-
-    builder = StateGraph(MessagesState)
-    builder.add_node("agent", agent)
-    builder.add_node("tools", ToolNode(tools))
-    builder.add_edge(START, "agent")
-    builder.add_conditional_edges("agent", tools_condition)
-    builder.add_edge("tools", "agent")
-    return builder.compile(checkpointer=checkpointer)
-
-
-def build_simple_graph(model, tools, checkpointer=None):
-    """LangChain 1.x 高层写法:create_agent 内部同样运行在 LangGraph 上。"""
-    return create_agent(
-        model,
-        tools,
-        system_prompt=SYSTEM_PROMPT,
-        checkpointer=checkpointer,
-    )
 
 
 def run_turn(graph, config, user_input: str) -> None:
@@ -158,7 +113,7 @@ def main() -> None:
     retriever = build_retriever_or_exit()
     tools = [calculator, make_search_tool(retriever), send_report]
     checkpointer = InMemorySaver()
-    model = ChatDeepSeek(model=MODEL_NAME, temperature=0)
+    model = build_chat_model(temperature=0)
 
     use_simple = "--simple" in sys.argv[1:]
     graph = (

@@ -4,7 +4,7 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
-from main import build_graph
+from graph import build_graph
 from tools import calculator, send_report
 
 

@@ -65,7 +65,7 @@ class FakeToolGraph:
                     "messages": [
                         ToolMessage(
                             content="长" * 300,
-                            name="search_knowledge",
+                            name="search_docs",
                             tool_call_id="c1",
                         )
                     ]

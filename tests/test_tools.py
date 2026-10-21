@@ -75,6 +75,7 @@ def test_search_tool_formats_results():
             [Document(page_content="checkpointer 保存状态", metadata={"source": "k.md"})]
         )
     )
+    assert tool.name == "search_docs"
     out = tool.invoke({"query": "checkpointer"})
     assert "checkpointer 保存状态" in out
     assert "k.md" in out

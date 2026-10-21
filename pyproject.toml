@@ -12,11 +12,31 @@ dependencies = [
   "langchain-text-splitters>=1.1,<2",
   "numpy>=1.26",
   "python-dotenv>=1.2",
+  "tiktoken>=0.14",
 ]
 
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "pytest-asyncio>=1.4", "httpx>=0.28"]
+observability = [
+  "openinference-instrumentation-langchain>=0.1.79,<0.2",
+  "opentelemetry-sdk>=1.30",
+  "opentelemetry-exporter-otlp-proto-http>=1.30",
+]
+serve = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "langgraph-checkpoint-postgres>=3.2,<4",
+  "psycopg[binary,pool]>=3.2",
+]
+rag = [
+  "langchain-postgres>=0.0.19",
+  "psycopg[binary]>=3.2",
+  "rank-bm25>=0.2.2",
+  "jieba>=0.42",
+]
+mcp = ["mcp>=1.24,<2", "langchain-mcp-adapters>=0.3,<0.4"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+asyncio_mode = "auto"

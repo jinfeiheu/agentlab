@@ -14,7 +14,7 @@ Checkpointer 在每一步保存图的状态,按 thread_id 区分会话,因此同
 
 ## 4. 工具调用与 ReAct 循环
 
-模型通过 tool calling 返回工具名和参数,图把消息交给 ToolNode 执行工具,工具结果再回到模型,直到模型不再调用工具。这个循环就是常见的 ReAct 模式。calculator、search_knowledge、send_report 都是这里的工具。
+模型通过 tool calling 返回工具名和参数,图把消息交给 ToolNode 执行工具,工具结果再回到模型,直到模型不再调用工具。这个循环就是常见的 ReAct 模式。calculator、search_docs、send_report 都是这里的工具。
 
 ## 5. RAG 流程
 

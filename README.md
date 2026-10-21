@@ -25,14 +25,14 @@ langchain-demo/
 main.py CLI
    │  /new 换 thread_id    /quit 退出
    ▼
-LangGraph StateGraph(MessagesState)
+LangGraph StateGraph(MessagesState)  ← graph.py
    │
    ├─ agent 节点:ChatPromptTemplate | ChatDeepSeek.bind_tools(tools)
    │        │ 有 tool_calls
    │        ▼
    ├─ tools 节点:ToolNode
    │        ├─ calculator          安全 AST 计算
-   │        ├─ search_knowledge ──► rag.py
+   │        ├─ search_docs ──► rag.py
    │        │                        └─ bge-m3(Ollama) → InMemoryVectorStore → retriever
    │        └─ send_report ──► interrupt() ──► 你输入 y/n ──► Command(resume=...)
    │        │
@@ -99,7 +99,7 @@ uv run pytest -v
 
 ## 试这几句话
 
-1. `LangGraph 的 checkpointer 有什么用?` → 触发 `search_knowledge`,回答带来源。
+1. `LangGraph 的 checkpointer 有什么用?` → 触发 `search_docs`,回答带来源。
 2. `我叫小明` → 然后 `我叫什么?` → 验证多轮记忆。
 3. `帮我算 (12+8)*3` → 触发 `calculator`,结果为 60。
 4. `把今天的结论发送报告` → 触发 `send_report`,先出现确认提示:
