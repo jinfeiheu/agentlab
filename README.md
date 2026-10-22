@@ -14,7 +14,7 @@ langchain-demo/
 ├── tools.py           # 计算器 / 知识库检索 / 发送报告(HITL)
 ├── data/docs/         # 8 篇冻结技术栈语料
 ├── eval/              # 27 条 golden set 与评测工具
-├── tests/             # 29 个离线测试
+├── tests/             # 44 个离线测试
 ├── pyproject.toml
 ├── .env.example
 └── README.md
@@ -153,5 +153,5 @@ graph = create_agent(model, tools, system_prompt=SYSTEM_PROMPT, checkpointer=che
 - **`缺少 DEEPSEEK_API_KEY`**:复制 `.env.example` 为 `.env` 并填写真实 Key。
 - **`知识库构建失败...connection refused`**:Ollama 没启动,执行 `ollama serve`;首次还需 `ollama pull bge-m3`,再用 `ollama list` 确认。
 - **DeepSeek 能不能做 embedding?** 不能,它没有 embeddings 接口。本项目用本地 Ollama 的 `bge-m3`。
-- **模型名报错**:在 `.env` 用 `DEEPSEEK_MODEL` 指定账号可用的模型;默认 `deepseek-chat`。
+- **模型名报错**:在 `.env` 用 `DEEPSEEK_MODEL` 指定账号可用的模型;默认 `deepseek-flash`。
 - **LangSmith 没数据**:确认 `LANGSMITH_TRACING=true` 和 `LANGSMITH_API_KEY` 已在启动前写入 `.env`。

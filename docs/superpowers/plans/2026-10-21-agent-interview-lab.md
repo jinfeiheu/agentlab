@@ -299,7 +299,8 @@ Expected: 全部通过。
 **Interfaces:**
 - Produces:
   - `eval.retrieval_metrics.recall_at_k(retrieved_ids: list[str], relevant_ids: set[str], k: int) -> float`
-  - `eval.retrieval_metrics.mrr(retrieved_ids: list[str], relevant_ids: set[str]) -> float`
+  - `eval.retrieval_metrics.reciprocal_rank(retrieved_ids: list[str], relevant_ids: set[str]) -> float`
+  - `eval.retrieval_metrics.mrr(rows: list[dict]) -> float`
   - `eval.retrieval_metrics.ndcg_at_k(retrieved_ids: list[str], relevant_ids: set[str], k: int) -> float`
   - `eval.retrieval_metrics.aggregate(rows: list[dict], k: int) -> dict[str, float]`
   - `metrics.Usage`（dataclass：`input_tokens, output_tokens, total_tokens`）
@@ -311,19 +312,27 @@ Expected: 全部通过。
 
 ```python
 def test_recall_at_k():
-    assert recall_at_k(["a", "b", "c"], {"b"}, 2) == 0.5
+    assert recall_at_k(["a", "b", "c"], {"b", "d"}, 2) == 0.5
     assert recall_at_k(["a", "b"], {"b"}, 2) == 1.0
 
+def test_reciprocal_rank():
+    assert reciprocal_rank(["a", "b", "c"], {"b"}) == 0.5
+    assert reciprocal_rank(["a"], {"b"}) == 0.0
+
 def test_mrr():
-    assert mrr(["a", "b", "c"], {"b"}) == 0.5
-    assert mrr(["a"], {"b"}) == 0.0
+    rows = [
+        {"retrieved_ids": ["a", "b"], "relevant_ids": {"a"}},
+        {"retrieved_ids": ["c", "d"], "relevant_ids": {"d"}},
+    ]
+    assert mrr(rows) == 0.75
 
 def test_ndcg_at_k():
-    assert ndcg_at_k(["a", "b"], {"b"}, 2) == 0.5
+    # 标准二元 nDCG：命中在 rank 2，DCG = 1/log2(3)，IDCG = 1
+    assert ndcg_at_k(["a", "b"], {"b"}, 2) == pytest.approx(1 / math.log2(3))
 
 def test_usage_and_cost():
     usage = Usage(1000, 500, 1500)
-    assert estimate_cost(usage, "deepseek-chat", {"deepseek-chat": (2.0, 8.0)}) == 0.006
+    assert estimate_cost(usage, "deepseek-flash", {"deepseek-flash": (2.0, 8.0)}) == 0.006
 
 def test_metrics_summary_p50_p95():
     rec = MetricsRecorder()
@@ -342,7 +351,7 @@ Expected: FAIL（模块不存在）。
 
 - [ ] **Step 3: 实现指标**
 
-`recall_at_k` 用 `len(set(retrieved[:k]) & relevant) / len(relevant)`；`mrr` 取第一个命中的倒数排名；`ndcg_at_k` 用二元相关性计算 DCG/IDCG；`aggregate` 对多个问题取平均。`MetricsRecorder` 用列表保存 `(name, latency_ms, usage)`，`summary` 返回 count/p50/p95/total_tokens/total_cost；分位数用 nearest-rank（排序后取 `ceil(p*n)-1`），与测试的 p50=25、p95=40 一致。
+`recall_at_k` 用 `len(set(retrieved[:k]) & relevant) / len(relevant)`；`reciprocal_rank` 取第一个命中的倒数排名，`mrr` 对多条查询的 RR 取平均；`ndcg_at_k` 用二元相关性计算 DCG/IDCG；`aggregate` 对多个问题取平均。`MetricsRecorder` 用列表保存 `(name, latency_ms, usage)`，`summary` 返回 count/p50/p95/total_tokens/total_cost；p50 用 median（`[10,20,30,40]` 时为 25），p95 用 nearest-rank（排序后取 `ceil(0.95*n)-1`，4 个数时为 40）。
 
 - [ ] **Step 4: 运行确认通过**
 
@@ -366,7 +375,7 @@ Expected: PASS。
   - `eval.judge.build_judge() -> Runnable`
   - `eval.judge.judge_answer(judge, question: str, answer: str, contexts: list[str]) -> JudgeResult`
   - `eval.run_eval.EvalReport`（dataclass：`rows, generation, retrieval`）
-  - `eval.run_eval.evaluate(graph, retriever, golden, judge, *, model_name="deepseek-chat") -> EvalReport`
+  - `eval.run_eval.evaluate(graph, retriever, golden, judge, *, model_name="deepseek-flash") -> EvalReport`
   - `eval.run_eval.write_report(report, path: Path) -> None`
 
 - [ ] **Step 1: 写失败的 judge/runner 测试**
