@@ -79,3 +79,30 @@ def test_run_turn_truncates_long_tool_result(capsys):
     out = capsys.readouterr().out
     assert "已截断" in out
     assert out.count("长") < 300
+
+
+def test_main_sets_up_and_shuts_down_tracing(monkeypatch):
+    calls = []
+
+    class FakeCliGraph:
+        def get_graph(self):
+            return SimpleNamespace(draw_mermaid=lambda: "")
+
+    def raise_eof(_prompt):
+        raise EOFError
+
+    monkeypatch.setattr(main, "ensure_prerequisites", lambda: None)
+    monkeypatch.setattr(
+        main, "setup_tracing", lambda: calls.append("setup"), raising=False
+    )
+    monkeypatch.setattr(
+        main, "shutdown_tracing", lambda: calls.append("shutdown"), raising=False
+    )
+    monkeypatch.setattr(main, "build_retriever_or_exit", lambda: object())
+    monkeypatch.setattr(main, "build_chat_model", lambda **_: object())
+    monkeypatch.setattr(main, "build_graph", lambda *args, **kwargs: FakeCliGraph())
+    monkeypatch.setattr("builtins.input", raise_eof)
+
+    main.main()
+
+    assert calls == ["setup", "shutdown"]

@@ -13,6 +13,7 @@ from graph import SYSTEM_PROMPT, build_graph, build_simple_graph
 from models import build_chat_model
 from rag import build_inmemory_retriever
 from tools import calculator, make_search_tool, send_report
+from tracing import setup_tracing, shutdown_tracing
 
 HELP = """命令:
   /new    开启新会话(清空多轮记忆)
@@ -104,8 +105,17 @@ def run_turn(graph, config, user_input: str) -> None:
 
 
 def main() -> None:
-    """启动终端问答机器人。"""
+    """启动终端问答机器人:初始化追踪,并保证退出时刷出 span。"""
     ensure_prerequisites()
+    setup_tracing()
+    try:
+        _run_cli()
+    finally:
+        shutdown_tracing()
+
+
+def _run_cli() -> None:
+    """构建检索器与图,进入终端交互循环。"""
     print("正在构建知识库索引(首次会加载 bge-m3)...")
     retriever = build_retriever_or_exit()
     tools = [calculator, make_search_tool(retriever), send_report]
