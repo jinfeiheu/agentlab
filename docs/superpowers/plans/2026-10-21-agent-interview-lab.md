@@ -373,7 +373,7 @@ Expected: PASS。
 - Produces:
   - `eval.judge.JudgeResult`（Pydantic：`correctness: int`、`faithfulness: int`、`citation_support: bool`、`reason: str`）
   - `eval.judge.build_judge() -> Runnable`
-  - `eval.judge.judge_answer(judge, question: str, answer: str, contexts: list[str]) -> JudgeResult`
+  - `eval.judge.judge_answer(judge, question: str, answer: str, contexts: list[str], key_points: list[str] | None = None) -> JudgeResult`
   - `eval.run_eval.EvalReport`（dataclass：`rows, generation, retrieval`）
   - `eval.run_eval.evaluate(graph, retriever, golden, judge, *, model_name="deepseek-flash") -> EvalReport`
   - `eval.run_eval.write_report(report, path: Path) -> None`
@@ -382,7 +382,7 @@ Expected: PASS。
 
 ```python
 def test_judge_returns_structured_result():
-    fake = FakeStructuredRunnable(JudgeResult(correctness=4, faithfulness=5, citation_support=True, reason="ok"))
+    fake = FakeRunnable(JudgeResult(correctness=4, faithfulness=5, citation_support=True, reason="ok"))
     result = judge_answer(fake, "q", "a", ["ctx"])
     assert result.correctness == 4
     assert result.citation_support is True
@@ -395,7 +395,7 @@ def test_judge_failure_returns_safe_default():
 
 def test_evaluate_computes_metrics():
     report = evaluate(fake_graph, fake_retriever, golden_items, fake_judge)
-    assert report.retrieval["recall@k"] >= 0
+    assert report.retrieval["recall@3"] >= 0
     assert report.generation["task_success"] >= 0
     assert report.generation["tool_accuracy"] >= 0
     assert len(report.rows) == len(golden_items)
@@ -408,16 +408,19 @@ Expected: FAIL（模块不存在）。
 
 - [ ] **Step 3: 实现 `eval/judge.py`**
 
-`build_judge` 用 `build_judge_model().with_structured_output(JudgeResult)`；prompt 包含问题、回答、检索上下文和 1–5 分 rubric。`judge_answer` 捕获所有异常并返回 `JudgeResult(0, 0, False, f"judge failed: {exc}")`，保证 eval 不中断。
+`build_judge` 用 `build_judge_model().with_structured_output(JudgeResult, method="json_mode")`；deepseek-flash 的 thinking mode 不支持 `tool_choice`，JSON mode 可以正常工作。prompt 包含问题、golden 关键点、回答、检索上下文和 1–5 分 rubric，并要求只输出 JSON。`judge_answer` 捕获所有异常并返回 `JudgeResult(0, 0, False, f"judge failed: {exc}")`，保证 eval 不中断。
 
 - [ ] **Step 4: 实现 `eval/run_eval.py`**
 
 对每条 golden：
-- 用 `retriever.invoke(question)` 得到检索 docs，取 `metadata["chunk_id"]` 计算检索指标。
-- 用 graph 的 fresh `thread_id` invoke，收集最后一条 AI 回答、`ToolMessage` 名称、引用来源。
+- 用 `retriever.invoke(question)` 得到检索 docs，取 `metadata["chunk_id"]` 计算单次检索指标；`retrieved_ids` 只代表这条固定检索管线，不要混入 agent 的工具结果。
+- 用 graph 的 fresh `thread_id` invoke，收集最后一条 AI 回答、`ToolMessage` 名称和内容、引用来源。
+- judge 的 contexts 只使用 agent 的 ToolMessage 内容：预取 top-k 模型并没有看到，不能算进 citation_support。预取结果只用于检索指标，并另记 `pre_retrieval_labels` 方便和 `evidence_labels` 对比。Agent 可能用与原始问题不同的 query 多次检索，这些 query 和证据要单独记录。
+- 记录每题的 `tool_queries` / `evidence_labels`，汇总 `avg_search_calls`，用于观察 agentic 检索的成本。
 - `judge_answer` 评分；记录延迟、usage、成本。
 - `task_success = correctness >= 4 and citation_support`（不可回答问题改为“是否拒答”）。
-- `tool_accuracy` = 实际调用的工具名集合与 `expected_tools` 完全一致的比例。
+- `tool_accuracy` 只统计可回答题；不可回答题单独计算 `refusal_rate`；`citation_support_rate` 也只统计可回答题。
+- 拒答词表要覆盖“无法回答、不能提供、无法透露”等表达，不能只匹配“不知道”。
 - `write_report` 输出 Markdown 表格 + JSON；先 `path.parent.mkdir(parents=True, exist_ok=True)`。
 - CLI：`--limit`, `--output`, `--retriever baseline|hybrid`, `--rerank`（后两项在 Task 10/11 接入；本任务先支持 `baseline`）。
 

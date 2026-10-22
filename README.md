@@ -14,7 +14,7 @@ langchain-demo/
 ├── tools.py           # 计算器 / 知识库检索 / 发送报告(HITL)
 ├── data/docs/         # 8 篇冻结技术栈语料
 ├── eval/              # 27 条 golden set 与评测工具
-├── tests/             # 44 个离线测试
+├── tests/             # 53 个离线测试
 ├── pyproject.toml
 ├── .env.example
 └── README.md
