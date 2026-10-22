@@ -712,6 +712,129 @@ Expected: PASS。手工：启动 API 对话一次，重启 API，同一 `session
 
 ---
 
+### Task 8.5: HITL resume（send_report）
+
+> 依赖 Task 8 的持久化 checkpointer；这里补上 `send_report` 的“确认/取消”恢复链路。当前行为的临时兜底是：中断后下一轮 `/chat` 会重置该 thread，不会 400，但会丢会话记忆；本任务完成后改为显式 resume。
+
+**Files:**
+- Modify: `api.py`（新增 `POST /chat/resume`、SSE `interrupt` 事件、`ChatResponse` 可选 `interrupt` 字段）
+- Modify: `static/index.html`（确认/取消按钮）
+- Create: `tests/test_resume.py`
+- Modify: `tests/fakes.py`（需要时加 `InterruptGraph`；也可只在测试文件里定义）
+
+**Interfaces:**
+- Consumes: `api.Services`、`api.get_thread_lock`、`api._extract_answer` / `_extract_sources`、`tools.send_report` 的 `interrupt({"question": ..., "content": ...})`
+- Produces:
+  - `POST /chat/resume`：body `{"session_id": str, "answer": str}`；同一 Bearer token；返回 `ChatResponse`；没有 pending interrupt → 409。
+  - SSE `interrupt` 事件：`{"type": "interrupt", "question": str, "content": str}`；`/chat` 非流式响应增加可选 `interrupt: dict | None`。
+  - 可选：`POST /chat/stream/resume`（复用 `_chat_events`，恢复后继续流式输出）。
+
+- [ ] **Step 1: 写失败测试**
+
+```python
+def test_resume_without_interrupt_returns_409():
+    graph = FakeGraphWithoutInterrupt()
+    client, token = auth_client(fake_services(graph=graph))
+    r = client.post("/chat/resume", headers=bearer(token),
+                    json={"session_id": "s1", "answer": "y"})
+    assert r.status_code == 409
+
+def test_resume_yes_uses_command():
+    graph = InterruptGraph()
+    client, token = auth_client(fake_services(graph=graph))
+    r = client.post("/chat/resume", headers=bearer(token),
+                    json={"session_id": "s1", "answer": "y"})
+    assert r.status_code == 200
+    assert r.json()["answer"] == "resumed"
+    assert graph.inputs[0].resume == "y"
+
+def test_resume_no_uses_command():
+    # 同上，answer="n"，Command.resume == "n"
+
+def test_resume_is_scoped_to_user():
+    # 即使 session_id 里塞 user_bob，config.thread_id 仍以 user_alice: 开头
+
+def test_resume_second_time_returns_409():
+    # 第一次 resume 后 interrupt 已消费，第二次 409
+
+def test_stream_emits_interrupt_event():
+    # fake astream 产出 token 后结束，aget_state 带 interrupts；
+    # body 里应同时有 "type": "interrupt" 和 question/content
+```
+
+`InterruptGraph` 至少提供：
+
+```python
+class InterruptGraph:
+    async def aget_state(self, config):
+        return SimpleNamespace(
+            values={"messages": []},
+            interrupts=(SimpleNamespace(value={
+                "question": "确认发送这份报告吗?",
+                "content": "测试报告",
+            }),),
+        )
+    async def ainvoke(self, payload, config=None, **kwargs):
+        self.inputs.append(payload)
+        return {"messages": [AIMessage(content="resumed")]}
+```
+
+- [ ] **Step 2: 运行确认失败**
+
+Run: `uv run pytest tests/test_resume.py -q`
+Expected: FAIL（`/chat/resume` 不存在）。
+
+- [ ] **Step 3: 实现 `POST /chat/resume`**
+
+- 新增 `ResumeRequest`：`session_id: str`、`answer: str`。
+- 认证、`thread_id = f"{user.user_id}:{body.session_id}"`、`get_thread_lock` 全部复用现有逻辑。
+- **不要调用 `_prepare_thread`**：它会把中断当作不一致状态重置。resume 路径直接：
+  1. `state = await svc.graph.aget_state(config)`；
+  2. `if not state.interrupts: raise HTTPException(409, "no pending interrupt")`；
+  3. `result = await asyncio.wait_for(svc.graph.ainvoke(Command(resume=body.answer), config=config), timeout=REQUEST_TIMEOUT)`；
+  4. 返回 `ChatResponse(answer=..., sources=..., interrupt=...)`。
+- `Command` 从 `langgraph.types` 导入；`interrupt` 字段从 resume 后的新 `aget_state` 读取（resume 后可能再次中断）。
+- 幂等：第一次 resume 消费 interrupt；第二次 `state.interrupts` 为空 → 409。
+
+- [ ] **Step 4: 实现 SSE `interrupt` 事件**
+
+- 在 `_chat_events` 的流结束、`done` 之前，用 `aget_state(config)` 检查 `state.interrupts`；有的话先发：
+
+```python
+yield sse({
+    "type": "interrupt",
+    "question": value.get("question", ""),
+    "content": value.get("content", ""),
+})
+```
+
+- 正常 `/chat` 的非流式路径也检查一次，把 `interrupt` 填进 `ChatResponse`（没有则为 `None`）。
+- `_chat_events` 增加 `skip_prepare: bool = False`：普通轮次仍调用 `_prepare_thread`；可选的 `/chat/stream/resume` 传 `skip_prepare=True` 并传 `Command(resume=...)`。
+
+- [ ] **Step 5: 前端确认/取消**
+
+- `handleEvent` 处理 `interrupt`：显示 question/content 和两个按钮“确认发送 / 取消”。
+- 点击后 `POST /chat/resume`，body `{session_id, answer: "y" | "n"}`；成功则显示返回的 answer 和 sources，失败 401/409 给出提示。
+- resume 期间禁用按钮；resume 后如果又返回 `interrupt`，复用同一确认块。
+- 注意：中断后如果用户不确认而是直接发新消息，现有 `_prepare_thread` 仍会重置该 thread；这是本任务保留的兜底，不在 UI 上额外拦截。
+
+- [ ] **Step 6: 运行测试**
+
+Run: `uv run pytest tests/test_resume.py tests/test_api.py -q`
+Expected: PASS。
+
+- [ ] **Step 7: 手工验证（含 Task 8 的 Postgres）**
+
+1. `USE_DB=true uv run uvicorn api:app --port 8000`；
+2. 页面输入“请调用 send_report 工具，把「测试报告」发送给我”；
+3. 看到 `interrupt` 确认块；点“确认发送” → 工具返回“已发送(模拟)”，再点“取消” → “已取消发送”；
+4. 中断后重启 API，用同一 `session_id` 调 `/chat/resume`，仍能恢复（验证 Postgres 持久化）；
+5. 同一 interrupt 连续 resume 两次，第二次返回 409。
+
+**面试讲点：** HITL 状态机、interrupt/checkpoint 持久化、resume 与 reset 的取舍、幂等与并发锁、认证作用域。
+
+---
+
 ## Phase 3：RAG 升级
 
 ### Task 9: 文档摄入到 pgvector
