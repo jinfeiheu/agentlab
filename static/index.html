@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Interview Lab</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0f1115;
+    --panel: #171a21;
+    --text: #e8eaf0;
+    --muted: #8b93a7;
+    --accent: #5b8cff;
+    --border: #2a2f3a;
+    --tool: #8b93a7;
+    --error: #ff6b6b;
+    --ok: #61d095;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  main { max-width: 780px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 16px;
+  }
+  label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  input {
+    width: 100%;
+    padding: 9px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: #0d0f14;
+    color: var(--text);
+    font-size: 14px;
+    font-family: inherit;
+  }
+  input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .row { display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 10px; align-items: end; }
+  button {
+    padding: 9px 16px;
+    border-radius: 8px;
+    border: 0;
+    background: var(--accent);
+    color: white;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  #status { font-size: 13px; color: var(--muted); margin-top: 10px; }
+  #chat {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-height: 220px;
+    max-height: 52vh;
+    overflow: auto;
+    padding: 4px 2px;
+  }
+  .msg {
+    padding: 10px 12px;
+    border-radius: 10px;
+    font-size: 14px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .user { align-self: flex-end; background: #24304a; max-width: 85%; }
+  .assistant { align-self: flex-start; background: #1b2029; border: 1px solid var(--border); max-width: 90%; }
+  .tool {
+    color: var(--tool);
+    font-size: 12px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin: 2px 0;
+  }
+  .tool-head { font-weight: 500; }
+  .tool-result {
+    margin-top: 2px;
+    padding-left: 10px;
+    border-left: 2px solid var(--border);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .error { color: var(--error); font-size: 13px; }
+  .send-row { display: flex; gap: 10px; margin-top: 12px; }
+  .send-row input { flex: 1; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 8px; }
+  @media (max-width: 640px) {
+    .row { grid-template-columns: 1fr 1fr; }
+    .row button { grid-column: span 2; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>Agent Interview Lab</h1>
+  <div class="sub">LangChain × LangGraph · SSE 流式问答</div>
+
+  <section class="panel">
+    <div class="row">
+      <div><label for="username">用户名</label><input id="username" value="alice" autocomplete="username"></div>
+      <div><label for="password">密码</label><input id="password" type="password" value="alice-pass" autocomplete="current-password"></div>
+      <div><label for="session">会话 ID</label><input id="session" value="demo"></div>
+      <button id="login">登录</button>
+    </div>
+    <div id="status">未登录</div>
+  </section>
+
+  <section class="panel">
+    <div id="chat"></div>
+    <div class="send-row">
+      <input id="message" placeholder="问点什么，例如：LangGraph 的 checkpointer 有什么用？" disabled>
+      <button id="send" disabled>发送</button>
+    </div>
+    <div class="hint">工具调用和检索结果会以灰色小字显示；回答逐 token 流式输出。</div>
+  </section>
+</main>
+<script>
+  const $ = (id) => document.getElementById(id);
+  let token = null;
+  let busy = false;
+  let toolSeq = 0;
+  const toolResults = new Map();
+
+  function scrollToBottom() {
+    $("chat").scrollTop = $("chat").scrollHeight;
+  }
+
+  function addMessage(role, text) {
+    const el = document.createElement("div");
+    el.className = "msg " + role;
+    el.textContent = text;
+    $("chat").appendChild(el);
+    scrollToBottom();
+    return el;
+  }
+
+  function addTool(text, before = null, isError = false) {
+    const el = document.createElement("div");
+    el.className = "tool" + (isError ? " error" : "");
+    el.textContent = text;
+    if (before !== null) {
+      $("chat").insertBefore(el, before);
+    } else {
+      $("chat").appendChild(el);
+    }
+    scrollToBottom();
+    return el;
+  }
+
+  function setStatus(text, kind = "") {
+    $("status").textContent = text;
+    $("status").style.color = kind === "ok" ? "var(--ok)" : kind === "error" ? "var(--error)" : "";
+  }
+
+  async function doLogin() {
+    const body = {
+      username: $("username").value.trim(),
+      password: $("password").value,
+    };
+    setStatus("登录中…");
+    try {
+      const res = await fetch("/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        setStatus("登录失败：用户名或密码错误", "error");
+        return;
+      }
+      const data = await res.json();
+      token = data.token;
+      $("message").disabled = false;
+      $("send").disabled = false;
+      setStatus("已登录，可以开始对话", "ok");
+      $("message").focus();
+    } catch (err) {
+      setStatus("登录失败：" + err.message, "error");
+    }
+  }
+
+  function handleEvent(evt, bubble) {
+    if (evt.type === "token") {
+      bubble.textContent += evt.text;
+    } else if (evt.type === "tool_call") {
+      toolSeq += 1;
+      const callId = evt.id || ("auto-" + toolSeq);
+      const block = document.createElement("div");
+      block.className = "tool";
+      const head = document.createElement("div");
+      head.className = "tool-head";
+      head.textContent = "🔧 #" + toolSeq + " " + evt.name + "(" + JSON.stringify(evt.args) + ")";
+      const result = document.createElement("div");
+      result.className = "tool-result";
+      result.textContent = "⏳ 等待结果…";
+      block.appendChild(head);
+      block.appendChild(result);
+      $("chat").insertBefore(block, bubble);
+      toolResults.set(callId, result);
+    } else if (evt.type === "tool_result") {
+      const result = toolResults.get(evt.tool_call_id);
+      if (result) {
+        result.textContent = "📄 结果：" + evt.content;
+      } else {
+        addTool("📄 " + evt.name + "（未匹配到调用）：" + evt.content, bubble);
+      }
+    } else if (evt.type === "error") {
+      addTool("❌ " + evt.message, bubble, true);
+    } else if (evt.type === "done" && evt.sources && evt.sources.length) {
+      addTool("来源：" + evt.sources.join("，"));
+    }
+    scrollToBottom();
+  }
+
+  async function send() {
+    if (!token || busy) return;
+    const message = $("message").value.trim();
+    if (!message) return;
+    busy = true;
+    toolResults.clear();
+    toolSeq = 0;
+    $("send").disabled = true;
+    $("message").value = "";
+    addMessage("user", message);
+    const bubble = addMessage("assistant", "");
+    try {
+      const res = await fetch("/chat/stream", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "Authorization": "Bearer " + token,
+        },
+        body: JSON.stringify({
+          message,
+          session_id: $("session").value.trim() || "demo",
+        }),
+      });
+      if (res.status === 401) {
+        token = null;
+        $("send").disabled = true;
+        $("message").disabled = true;
+        setStatus("登录已失效，请重新登录", "error");
+        bubble.remove();
+        return;
+      }
+      if (!res.ok || !res.body) {
+        addTool("❌ 请求失败：HTTP " + res.status, bubble, true);
+        return;
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let index;
+        while ((index = buffer.indexOf("\n\n")) >= 0) {
+          const raw = buffer.slice(0, index);
+          buffer = buffer.slice(index + 2);
+          for (const line of raw.split("\n")) {
+            if (!line.startsWith("data: ")) continue;
+            handleEvent(JSON.parse(line.slice(6)), bubble);
+          }
+        }
+      }
+    } catch (err) {
+      addTool("❌ " + err.message, bubble, true);
+    } finally {
+      busy = false;
+      $("send").disabled = !token;
+      $("message").focus();
+    }
+  }
+
+  $("login").addEventListener("click", doLogin);
+  $("send").addEventListener("click", send);
+  $("message").addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      send();
+    }
+  });
+  $("password").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") doLogin();
+  });
+</script>
+</body>
+</html>
