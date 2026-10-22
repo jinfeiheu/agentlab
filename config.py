@@ -26,7 +26,7 @@ DATABASE_URL = os.getenv(
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-flash")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "bge-m3")
-AUTH_SECRET = os.getenv("AUTH_SECRET", "dev-only-change-me")
+AUTH_SECRET = os.getenv("AUTH_SECRET", "dev-only-change-me-please-replace-me")
 TRACING_ENABLED = _env_bool("TRACING_ENABLED", False)
 PHOENIX_ENDPOINT = os.getenv(
     "PHOENIX_ENDPOINT", "http://localhost:6006/v1/traces"
