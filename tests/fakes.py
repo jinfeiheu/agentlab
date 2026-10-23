@@ -102,6 +102,7 @@ class FakeServices:
 
     graph: object
     retriever: object = None
+    db_check: object = None
 
 
 def fake_services(graph=None, retriever=None) -> FakeServices:

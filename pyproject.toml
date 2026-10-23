@@ -41,3 +41,6 @@ mcp = ["mcp>=1.24,<2", "langchain-mcp-adapters>=0.3,<0.4"]
 pythonpath = ["."]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+  "integration: 需要真实 Postgres/Ollama 等外部服务的集成测试",
+]

@@ -102,6 +102,27 @@ def test_healthz():
     assert client.get("/healthz").json() == {"status": "ok"}
 
 
+def test_healthz_runs_db_check_when_configured():
+    calls = []
+    services = fake_services()
+    services.db_check = lambda: calls.append("check")
+    client = TestClient(create_app(services=services))
+    assert client.get("/healthz").json() == {"status": "ok"}
+    assert calls == ["check"]
+
+
+def test_healthz_returns_503_when_db_check_fails():
+    async def failing_check():
+        raise RuntimeError("connection refused")
+
+    services = fake_services()
+    services.db_check = failing_check
+    client = TestClient(create_app(services=services))
+    response = client.get("/healthz")
+    assert response.status_code == 503
+    assert "数据库不可用" in response.json()["detail"]
+
+
 def test_lifespan_sets_up_and_shuts_down_tracing(monkeypatch):
     calls = []
     monkeypatch.setattr(
@@ -110,13 +131,31 @@ def test_lifespan_sets_up_and_shuts_down_tracing(monkeypatch):
     monkeypatch.setattr(
         api, "shutdown_tracing", lambda: calls.append("shutdown"), raising=False
     )
-    monkeypatch.setattr(api, "build_services", lambda: fake_services())
+    async def fake_build_services():
+        return fake_services()
+
+    monkeypatch.setattr(api, "build_services", fake_build_services)
 
     with TestClient(create_app()) as client:
         assert calls == ["setup"]
         assert client.get("/healthz").status_code == 200
 
     assert calls == ["setup", "shutdown"]
+
+
+def test_lifespan_degrades_when_services_fail(monkeypatch):
+    async def failing_build_services():
+        raise RuntimeError("connection refused")
+
+    monkeypatch.setattr(api, "setup_tracing", lambda: None)
+    monkeypatch.setattr(api, "shutdown_tracing", lambda: None)
+    monkeypatch.setattr(api, "build_services", failing_build_services)
+
+    with TestClient(create_app()) as client:
+        response = client.get("/healthz")
+
+    assert response.status_code == 503
+    assert "服务初始化失败" in response.json()["detail"]
 
 
 def test_index_serves_page():

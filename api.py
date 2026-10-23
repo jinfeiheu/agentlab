@@ -1,25 +1,29 @@
 """FastAPI 服务:JWT 登录、对话、SSE 流式输出与最小网页。"""
 
 import asyncio
+import inspect
 import json
 import logging
 import re
 import time
-from contextlib import aclosing, asynccontextmanager
+from contextlib import AsyncExitStack, aclosing, asynccontextmanager
 from dataclasses import dataclass, field
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.store.memory import InMemoryStore
 from pydantic import BaseModel
 
 from auth import UserContext, login as authenticate, verify_token
 from config import (
     BASE_DIR,
+    DATABASE_URL,
     DOCS_DIR,
     RATE_LIMIT_PER_MINUTE,
     REQUEST_TIMEOUT,
+    USE_DB,
 )
 from graph import build_graph
 from models import build_chat_model
@@ -67,6 +71,15 @@ class Services:
 
     graph: object
     retriever: object = None
+    db_check: object = None
+    _closer: object = None
+
+    async def aclose(self) -> None:
+        """释放 Postgres 连接等外部资源;内存模式无需处理。"""
+        closer = self._closer
+        self._closer = None
+        if closer is not None:
+            await closer()
 
 
 @dataclass
@@ -93,12 +106,50 @@ class RateLimiter:
         return True
 
 
-def build_services() -> Services:
-    """构建真实依赖:模型、检索器、工具与内存 checkpointer。"""
+async def _check_db() -> None:
+    """执行 SELECT 1,供健康检查使用。"""
+    from psycopg import AsyncConnection
+
+    async with await AsyncConnection.connect(
+        DATABASE_URL, connect_timeout=3
+    ) as conn:
+        await conn.execute("SELECT 1")
+
+
+async def build_services() -> Services:
+    """构建真实依赖;USE_DB=true 时改用 Postgres checkpointer 与 Store。"""
     retriever = build_inmemory_retriever(DOCS_DIR)
     tools = [calculator, make_search_tool(retriever), send_report]
-    graph = build_graph(build_chat_model(temperature=0), tools, InMemorySaver())
-    return Services(graph=graph, retriever=retriever)
+    model = build_chat_model(temperature=0)
+    if not USE_DB:
+        graph = build_graph(
+            model, tools, InMemorySaver(), store=InMemoryStore()
+        )
+        return Services(graph=graph, retriever=retriever)
+
+    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+    from langgraph.store.postgres import AsyncPostgresStore
+
+    stack = AsyncExitStack()
+    try:
+        saver = await stack.enter_async_context(
+            AsyncPostgresSaver.from_conn_string(DATABASE_URL)
+        )
+        store = await stack.enter_async_context(
+            AsyncPostgresStore.from_conn_string(DATABASE_URL)
+        )
+        await saver.setup()
+        await store.setup()
+        graph = build_graph(model, tools, saver, store=store)
+    except Exception:
+        await stack.aclose()
+        raise
+    return Services(
+        graph=graph,
+        retriever=retriever,
+        db_check=_check_db,
+        _closer=stack.aclose,
+    )
 
 
 def sse(payload: dict) -> str:
@@ -373,8 +424,14 @@ def get_current_user(
 
 
 def get_services(request: Request) -> Services:
-    """从 app.state 取服务集合。"""
-    return request.app.state.services
+    """从 app.state 取服务集合;启动失败时统一 503。"""
+    services = request.app.state.services
+    if services is None:
+        raise HTTPException(
+            status_code=503,
+            detail=getattr(request.app.state, "startup_error", "服务未就绪"),
+        )
+    return services
 
 
 def get_thread_lock(app: FastAPI, thread_id: str) -> asyncio.Lock:
@@ -397,14 +454,23 @@ def create_app(services: Services | None = None) -> FastAPI:
             if app.state.services is None:
                 setup_tracing()
                 tracing_started = True
-                app.state.services = build_services()
+                try:
+                    app.state.services = await build_services()
+                except Exception as exc:  # noqa: BLE001 - 启动失败降级为 503
+                    logger.error("服务初始化失败: %s", exc)
+                    app.state.startup_error = f"服务初始化失败: {exc}"
             yield
         finally:
+            current = app.state.services
+            aclose = getattr(current, "aclose", None)
+            if aclose is not None:
+                await aclose()
             if tracing_started:
                 shutdown_tracing()
 
     app = FastAPI(title="Agent Interview Lab", lifespan=lifespan)
     app.state.services = services
+    app.state.startup_error = None
     app.state.limiter = RateLimiter(RATE_LIMIT_PER_MINUTE)
     app.state.thread_locks: dict[str, asyncio.Lock] = {}
 
@@ -418,7 +484,24 @@ def create_app(services: Services | None = None) -> FastAPI:
         return LoginResponse(token=token)
 
     @app.get("/healthz")
-    def healthz() -> dict[str, str]:
+    async def healthz() -> dict[str, str]:
+        services = app.state.services
+        if services is None:
+            raise HTTPException(
+                status_code=503,
+                detail=getattr(app.state, "startup_error", "服务未就绪"),
+            )
+        check = getattr(services, "db_check", None)
+        if check is not None:
+            try:
+                result = check()
+                if inspect.isawaitable(result):
+                    await result
+            except Exception as exc:  # noqa: BLE001 - 健康检查失败统一 503
+                logger.warning("数据库健康检查失败: %s", exc)
+                raise HTTPException(
+                    status_code=503, detail="数据库不可用"
+                ) from exc
         return {"status": "ok"}
 
     @app.get("/", include_in_schema=False)
