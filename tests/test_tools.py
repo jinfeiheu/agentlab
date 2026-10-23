@@ -84,3 +84,39 @@ def test_search_tool_formats_results():
 def test_search_tool_handles_no_results():
     tool = make_search_tool(FakeRetriever([]))
     assert "没有找到" in tool.invoke({"query": "不存在的内容"})
+
+
+def test_search_tool_limits_top_n():
+    docs = [
+        Document(
+            page_content=f"内容{i}",
+            metadata={"source": f"{i}.md", "section": "S"},
+        )
+        for i in range(4)
+    ]
+    tool = make_search_tool(FakeRetriever(docs), top_n=2)
+    out = tool.invoke({"query": "x"})
+    assert out.count("[来源:") == 2
+    assert "内容0" in out and "内容1" in out
+    assert "内容2" not in out
+
+
+def test_search_tool_applies_reranker():
+    docs = [
+        Document(page_content="a", metadata={"source": "a.md", "section": "S"}),
+        Document(page_content="b", metadata={"source": "b.md", "section": "S"}),
+    ]
+
+    class FakeReranker:
+        def __init__(self):
+            self.calls = []
+
+        def rerank(self, query, items):
+            self.calls.append((query, items))
+            return list(reversed(items))
+
+    reranker = FakeReranker()
+    tool = make_search_tool(FakeRetriever(docs), reranker=reranker, top_n=2)
+    out = tool.invoke({"query": "q"})
+    assert reranker.calls[0][0] == "q"
+    assert out.index("b.md") < out.index("a.md")

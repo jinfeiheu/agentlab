@@ -3,7 +3,6 @@
 import ast
 import operator
 
-from langchain_core.retrievers import BaseRetriever
 from langchain_core.tools import BaseTool, tool
 from langgraph.types import interrupt
 
@@ -75,13 +74,16 @@ def calculator(expression: str) -> str:
         return f"错误:{exc}"
 
 
-def make_search_tool(retriever: BaseRetriever) -> BaseTool:
+def make_search_tool(retriever, reranker=None, top_n: int = 3) -> BaseTool:
     """把 retriever 封装成 agent 可调用的检索工具。"""
 
     @tool
     def search_docs(query: str) -> str:
         """从本地知识库检索 LangChain/LangGraph 相关资料。"""
         docs = retriever.invoke(query)
+        if reranker is not None:
+            docs = reranker.rerank(query, docs)
+        docs = list(docs)[:top_n]
         if not docs:
             return "知识库中没有找到相关内容。"
         return format_docs(docs)
