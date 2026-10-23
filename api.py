@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.store.memory import InMemoryStore
+from langgraph.types import Command
 from pydantic import BaseModel
 
 from auth import UserContext, login as authenticate, verify_token
@@ -58,11 +59,19 @@ class ChatRequest(BaseModel):
     session_id: str
 
 
+class ResumeRequest(BaseModel):
+    """恢复一次被 interrupt 暂停的工具调用。"""
+
+    session_id: str
+    answer: str
+
+
 class ChatResponse(BaseModel):
-    """非流式对话响应。"""
+    """非流式对话响应;interrupt 非空表示等待人工确认。"""
 
     answer: str
     sources: list[str]
+    interrupt: dict | None = None
 
 
 @dataclass
@@ -223,6 +232,42 @@ def _extract_sources(result) -> list[str]:
     )
 
 
+def _interrupt_payload(state) -> dict | None:
+    """把 LangGraph 的 interrupt 状态整理成前端可用的事件。"""
+    interrupts = getattr(state, "interrupts", ()) or ()
+    if not interrupts:
+        return None
+    value = getattr(interrupts[0], "value", None)
+    if isinstance(value, dict):
+        return {
+            "question": str(value.get("question", "")),
+            "content": str(value.get("content", "")),
+        }
+    return {"question": str(value or ""), "content": ""}
+
+
+async def _has_interrupt(graph, config) -> bool:
+    """线程是否有 pending interrupt;fake graph 没有 aget_state 时视为没有。"""
+    aget_state = getattr(graph, "aget_state", None)
+    if aget_state is None:
+        return False
+    state = await aget_state(config)
+    return bool(getattr(state, "interrupts", ()))
+
+
+async def _get_interrupt(graph, config) -> dict | None:
+    """读取线程当前的 pending interrupt;fake graph 没有 aget_state 时返回 None。"""
+    aget_state = getattr(graph, "aget_state", None)
+    if aget_state is None:
+        return None
+    try:
+        state = await aget_state(config)
+    except Exception as exc:  # noqa: BLE001 - 读状态失败不影响已有回答
+        logger.warning("读取 interrupt 状态失败: %s", exc)
+        return None
+    return _interrupt_payload(state)
+
+
 def _tool_events(message) -> list[dict]:
     """把一条消息转换成 tool_call / tool_result 事件。"""
     events: list[dict] = []
@@ -344,12 +389,21 @@ async def _prepare_thread(graph, config) -> None:
         await _reset_thread(graph, thread_id)
 
 
-async def _chat_events(graph, payload, config, request, timeout, lock):
+async def _chat_events(
+    graph, payload, config, request, timeout, lock, skip_prepare: bool = False
+):
     """把 graph 流转换成 SSE 事件;负责串行、修复、超时、断连和异常上报。"""
     sources: list[str] = []
     answer_parts: list[str] = []
     async with lock:
-        await _prepare_thread(graph, config)
+        if skip_prepare:
+            if not await _has_interrupt(graph, config):
+                yield sse(
+                    {"type": "error", "message": "no pending interrupt"}
+                )
+                return
+        else:
+            await _prepare_thread(graph, config)
         try:
             async with aclosing(
                 graph.astream(
@@ -395,6 +449,9 @@ async def _chat_events(graph, payload, config, request, timeout, lock):
                                     )
                                 for event in _tool_events(message):
                                     yield sse(event)
+            interrupt = await _get_interrupt(graph, config)
+            if interrupt:
+                yield sse({"type": "interrupt", **interrupt})
             yield sse(
                 {
                     "type": "done",
@@ -535,8 +592,83 @@ def create_app(services: Services | None = None) -> FastAPI:
                 raise HTTPException(
                     status_code=500, detail="chat failed"
                 ) from exc
+            interrupt = await _get_interrupt(svc.graph, config)
         return ChatResponse(
-            answer=_extract_answer(result), sources=_extract_sources(result)
+            answer=_extract_answer(result),
+            sources=_extract_sources(result),
+            interrupt=interrupt,
+        )
+
+    @app.post("/chat/resume", response_model=ChatResponse)
+    async def chat_resume(
+        body: ResumeRequest,
+        user: UserContext = Depends(get_current_user),
+        svc: Services = Depends(get_services),
+    ) -> ChatResponse:
+        """恢复 pending interrupt;没有中断时返回 409。"""
+        if not app.state.limiter.allow(user.user_id):
+            raise HTTPException(status_code=429, detail="rate limit exceeded")
+        thread_id = f"{user.user_id}:{body.session_id}"
+        config = {"configurable": {"thread_id": thread_id}}
+        async with get_thread_lock(app, thread_id):
+            aget_state = getattr(svc.graph, "aget_state", None)
+            if aget_state is None:
+                raise HTTPException(
+                    status_code=409, detail="no pending interrupt"
+                )
+            state = await aget_state(config)
+            if not getattr(state, "interrupts", ()):
+                raise HTTPException(
+                    status_code=409, detail="no pending interrupt"
+                )
+            try:
+                result = await asyncio.wait_for(
+                    svc.graph.ainvoke(
+                        Command(resume=body.answer), config=config
+                    ),
+                    timeout=REQUEST_TIMEOUT,
+                )
+            except asyncio.TimeoutError as exc:
+                raise HTTPException(
+                    status_code=504, detail="request timeout"
+                ) from exc
+            except Exception as exc:  # noqa: BLE001 - 统一成 500
+                raise HTTPException(
+                    status_code=500, detail="resume failed"
+                ) from exc
+            interrupt = await _get_interrupt(svc.graph, config)
+        return ChatResponse(
+            answer=_extract_answer(result),
+            sources=_extract_sources(result),
+            interrupt=interrupt,
+        )
+
+    @app.post("/chat/stream/resume")
+    async def chat_stream_resume(
+        body: ResumeRequest,
+        request: Request,
+        user: UserContext = Depends(get_current_user),
+        svc: Services = Depends(get_services),
+    ) -> StreamingResponse:
+        """流式恢复 pending interrupt;没有中断时返回 409。"""
+        if not app.state.limiter.allow(user.user_id):
+            raise HTTPException(status_code=429, detail="rate limit exceeded")
+        thread_id = f"{user.user_id}:{body.session_id}"
+        config = {"configurable": {"thread_id": thread_id}}
+        if not await _has_interrupt(svc.graph, config):
+            raise HTTPException(status_code=409, detail="no pending interrupt")
+        return StreamingResponse(
+            _chat_events(
+                svc.graph,
+                Command(resume=body.answer),
+                config,
+                request,
+                REQUEST_TIMEOUT,
+                get_thread_lock(app, thread_id),
+                skip_prepare=True,
+            ),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
     @app.post("/chat/stream")
