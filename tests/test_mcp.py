@@ -13,19 +13,36 @@ integration = pytest.mark.skipif(
 
 
 def test_mcp_server_config_uses_stdio():
-    config = MCP_SERVER_CONFIG["agentlab"]
-    assert config["transport"] == "stdio"
-    assert config["command"]
-    assert "mcp_server.py" in " ".join(config["args"])
-    assert config["cwd"]
+    assert set(MCP_SERVER_CONFIG) == {"agentlab", "utils"}
+    for config in MCP_SERVER_CONFIG.values():
+        assert config["transport"] == "stdio"
+        assert config["command"]
+        assert config["cwd"]
+    assert "mcp_server.py" in " ".join(MCP_SERVER_CONFIG["agentlab"]["args"])
+    assert "mcp_utils_server.py" in " ".join(MCP_SERVER_CONFIG["utils"]["args"])
 
 
 @pytest.mark.integration
 @integration
 async def test_mcp_client_loads_search_docs():
     tools = await load_mcp_tools()
-    names = [tool.name for tool in tools]
-    assert "search_docs" in names
-    tool = next(tool for tool in tools if tool.name == "search_docs")
-    result = await tool.ainvoke({"query": "checkpointer"})
+    names = {tool.name for tool in tools}
+    assert {
+        "search_docs",
+        "list_sources",
+        "doc_stats",
+        "calculator",
+        "word_count",
+    } <= names
+
+    search = next(tool for tool in tools if tool.name == "search_docs")
+    result = await search.ainvoke({"query": "checkpointer"})
     assert "checkpointer" in str(result).lower()
+
+    calc = next(tool for tool in tools if tool.name == "calculator")
+    result = await calc.ainvoke({"expression": "(12+8)*3"})
+    assert "60" in str(result)
+
+    sources_tool = next(tool for tool in tools if tool.name == "list_sources")
+    sources = await sources_tool.ainvoke({})
+    assert "02-langgraph.md#" in str(sources)

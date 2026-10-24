@@ -40,6 +40,12 @@ RERANK_DEVICE = os.getenv("RERANK_DEVICE", "cpu")
 LLM_RERANK_ENABLED = _env_bool("LLM_RERANK_ENABLED", False)
 USE_DB = _env_bool("USE_DB", False)
 USE_MCP = _env_bool("USE_MCP", False)
+# MCP 传输:stdio(本地子进程) 或 streamable_http(远程服务)
+MCP_TRANSPORT = os.getenv("MCP_TRANSPORT", "stdio")
+MCP_AGENTLAB_URL = os.getenv(
+    "MCP_AGENTLAB_URL", "http://localhost:8811/mcp"
+)
+MCP_UTILS_URL = os.getenv("MCP_UTILS_URL", "http://localhost:8812/mcp")
 PG_COLLECTION = os.getenv("PG_COLLECTION", "docs")
 REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "60"))
 RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "30"))

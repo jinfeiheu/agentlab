@@ -139,9 +139,12 @@ async def build_services() -> Services:
         from mcp_client import load_mcp_tools
 
         mcp_tools = await load_mcp_tools()
-        if not any(tool.name == "search_docs" for tool in mcp_tools):
-            raise RuntimeError("MCP server 未提供 search_docs 工具")
-        tools = [calculator, *mcp_tools, send_report]
+        missing = {"search_docs", "calculator"} - {
+            tool.name for tool in mcp_tools
+        }
+        if missing:
+            raise RuntimeError(f"MCP server 缺少工具:{sorted(missing)}")
+        tools = [*mcp_tools, send_report]
     else:
         retriever = (
             build_pgvector_hybrid_retriever()
