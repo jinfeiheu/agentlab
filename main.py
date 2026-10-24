@@ -4,12 +4,22 @@ import os
 import sys
 import uuid
 
-from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    SystemMessage,
+    ToolMessage,
+)
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.store.memory import InMemoryStore
 from langgraph.types import Command
 
+from auth import DEMO_USERS, UserContext
+from context import compress_tool_content
 from config import (
     DOCS_DIR,
+    EMBED_DIMS,
+    ENABLE_AUTO_MEMORY,
     LLM_RERANK_ENABLED,
     RAG_MODE,
     RERANK_DEVICE,
@@ -17,10 +27,18 @@ from config import (
     RERANK_MODEL,
 )
 from graph import SYSTEM_PROMPT, build_graph, build_simple_graph
-from models import build_chat_model
+from memory import (
+    maybe_extract_and_save,
+    messages_used_save_memory,
+    save_memory,
+    search_memory,
+    summarize_and_save,
+)
+from models import build_chat_model, build_embeddings
 from rag import build_inmemory_retriever
 from retrieval import build_pgvector_hybrid_retriever, build_reranker
 from security import check_input, redact_pii
+from tickets import get_ticket
 from tools import calculator, make_search_tool, send_report
 from tracing import setup_tracing, shutdown_tracing
 
@@ -66,13 +84,32 @@ def guard_input(text: str) -> bool:
     return False
 
 
-def run_turn(graph, config, user_input: str) -> None:
+def resolve_cli_user(argv: list[str]) -> UserContext:
+    """解析 --user,把 demo 用户名绑定成 UserContext;默认 alice。"""
+    username = "alice"
+    if "--user" in argv:
+        index = argv.index("--user")
+        if index + 1 >= len(argv):
+            raise SystemExit("--user 需要一个用户名,例如 --user alice")
+        username = argv[index + 1]
+    user = DEMO_USERS.get(username)
+    if user is None:
+        raise SystemExit(
+            f"未知用户:{username};可选:{', '.join(sorted(DEMO_USERS))}"
+        )
+    return UserContext(user_id=user.user_id)
+
+
+def run_turn(graph, config, user_input: str, context=None) -> None:
     """执行一轮对话:流式打印 token、工具事件,必要时处理 HITL 确认。"""
     payload = {"messages": [("user", user_input)]}
     while True:
         print("助手 > ", end="", flush=True)
         for mode, data in graph.stream(
-            payload, config=config, stream_mode=["messages", "updates"]
+            payload,
+            config=config,
+            context=context,
+            stream_mode=["messages", "updates"],
         ):
             if mode == "messages":
                 chunk, _metadata = data
@@ -101,10 +138,8 @@ def run_turn(graph, config, user_input: str) -> None:
                                 if isinstance(message.content, str)
                                 else str(message.content)
                             )
-                            preview = (
-                                content
-                                if len(content) <= _TOOL_PREVIEW_CHARS
-                                else content[:_TOOL_PREVIEW_CHARS] + " ...(已截断)"
+                            preview = compress_tool_content(
+                                content, _TOOL_PREVIEW_CHARS
                             )
                             print(
                                 f"\n📄 工具结果 [{message.name}]: {preview}",
@@ -127,6 +162,50 @@ def run_turn(graph, config, user_input: str) -> None:
         payload = Command(resume=answer)
 
 
+def maybe_extract_turn(model, store, user, graph, config, text) -> None:
+    """规则命中且本轮未显式 save_memory 时,做一次结构化抽取写入。"""
+    if not ENABLE_AUTO_MEMORY:
+        return
+    try:
+        state = graph.get_state(config)
+        if getattr(state, "interrupts", ()):
+            return
+        values = getattr(state, "values", None) or {}
+        messages = values.get("messages", []) if isinstance(values, dict) else []
+        if messages_used_save_memory(messages):
+            return
+        maybe_extract_and_save(model, store, user.user_id, text)
+    except Exception as exc:  # noqa: BLE001 - 自动记忆失败不影响对话
+        print(f"自动记忆失败:{redact_pii(str(exc))}")
+
+
+def finalize_session(model, store, user, graph, config) -> None:
+    """会话结束时生成一条 episode,而不是每轮追加长期记忆。"""
+    if not ENABLE_AUTO_MEMORY:
+        return
+    try:
+        state = graph.get_state(config)
+        if getattr(state, "interrupts", ()):
+            return
+        values = getattr(state, "values", None) or {}
+        messages = values.get("messages", []) if isinstance(values, dict) else []
+        summary = values.get("summary", "") if isinstance(values, dict) else ""
+        if summary:
+            messages = [
+                SystemMessage(content=f"较早对话摘要:\n{summary}"),
+                *messages,
+            ]
+        if messages:
+            thread_id = (config.get("configurable") or {}).get(
+                "thread_id", ""
+            )
+            summarize_and_save(
+                model, store, user.user_id, messages, thread_id=thread_id
+            )
+    except Exception as exc:  # noqa: BLE001 - 自动记忆失败不影响退出
+        print(f"自动记忆失败:{redact_pii(str(exc))}")
+
+
 def main() -> None:
     """启动终端问答机器人:初始化追踪,并保证退出时刷出 span。"""
     ensure_prerequisites()
@@ -147,9 +226,16 @@ def _run_cli() -> None:
         model_name=RERANK_MODEL,
         device=RERANK_DEVICE,
     )
+    user = resolve_cli_user(sys.argv[1:])
+    store = InMemoryStore(
+        index={"dims": EMBED_DIMS, "embed": build_embeddings()}
+    )
     tools = [
         calculator,
         make_search_tool(retriever, reranker=reranker),
+        get_ticket,
+        save_memory,
+        search_memory,
         send_report,
     ]
     checkpointer = InMemorySaver()
@@ -157,38 +243,45 @@ def _run_cli() -> None:
 
     use_simple = "--simple" in sys.argv[1:]
     graph = (
-        build_simple_graph(model, tools, checkpointer)
+        build_simple_graph(model, tools, checkpointer, store=store)
         if use_simple
-        else build_graph(model, tools, checkpointer)
+        else build_graph(model, tools, checkpointer, store=store)
     )
     print(graph.get_graph().draw_mermaid())
     config = {"configurable": {"thread_id": str(uuid.uuid4())}}
     mode_name = "create_agent 高层封装" if use_simple else "手写 StateGraph"
-    print(f"🤖 LangChain × LangGraph 问答机器人(模式:{mode_name})")
+    print(
+        f"🤖 LangChain × LangGraph 问答机器人"
+        f"(模式:{mode_name},用户:{user.user_id})"
+    )
     print("输入 /help 查看命令,直接输入问题开始对话。")
 
     while True:
         try:
             text = input("你 > ").strip()
         except (EOFError, KeyboardInterrupt):
+            finalize_session(model, store, user, graph, config)
             print("\n再见。")
             break
         if not text:
             continue
         if text in {"/quit", "/exit", "quit", "exit"}:
+            finalize_session(model, store, user, graph, config)
             print("再见。")
             break
         if text == "/help":
             print(HELP)
             continue
         if text == "/new":
+            finalize_session(model, store, user, graph, config)
             config = {"configurable": {"thread_id": str(uuid.uuid4())}}
             print("已开启新会话,之前的对话记忆已清空。")
             continue
         if not guard_input(text):
             continue
         try:
-            run_turn(graph, config, text)
+            run_turn(graph, config, text, context=user)
+            maybe_extract_turn(model, store, user, graph, config, text)
         except Exception as exc:
             print(f"\n调用失败:{redact_pii(str(exc))}")
 

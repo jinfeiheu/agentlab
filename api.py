@@ -22,6 +22,8 @@ from config import (
     BASE_DIR,
     DATABASE_URL,
     DOCS_DIR,
+    EMBED_DIMS,
+    ENABLE_AUTO_MEMORY,
     RAG_MODE,
     RATE_LIMIT_PER_MINUTE,
     RERANK_DEVICE,
@@ -32,8 +34,16 @@ from config import (
     USE_DB,
     USE_MCP,
 )
+from context import compress_tool_content
 from graph import build_graph
-from models import build_chat_model
+from memory import (
+    detect_memory_candidate,
+    maybe_extract_and_save,
+    messages_used_save_memory,
+    save_memory,
+    search_memory,
+)
+from models import build_chat_model, build_embeddings
 from rag import build_inmemory_retriever
 from retrieval import build_pgvector_hybrid_retriever, build_reranker
 from security import check_input, redact_pii
@@ -90,6 +100,8 @@ class Services:
     graph: object
     retriever: object = None
     db_check: object = None
+    model: object = None
+    memory_store: object = None
     _closer: object = None
 
     async def aclose(self) -> None:
@@ -146,8 +158,14 @@ async def build_services() -> Services:
         }
         if missing:
             raise RuntimeError(f"MCP server 缺少工具:{sorted(missing)}")
-        # 私有 ticket 留在本地进程,只把公共检索/计算交给 MCP。
-        tools = [*mcp_tools, get_ticket, send_report]
+        # 私有 ticket/记忆留在本地进程,只把公共检索/计算交给 MCP。
+        tools = [
+            *mcp_tools,
+            get_ticket,
+            save_memory,
+            search_memory,
+            send_report,
+        ]
     else:
         retriever = (
             build_pgvector_hybrid_retriever()
@@ -164,17 +182,32 @@ async def build_services() -> Services:
             calculator,
             make_search_tool(retriever, reranker=reranker),
             get_ticket,
+            save_memory,
+            search_memory,
             send_report,
         ]
     model = build_chat_model(temperature=0)
+    embeddings = build_embeddings()
     if not USE_DB:
-        graph = build_graph(
-            model, tools, InMemorySaver(), store=InMemoryStore()
+        store = InMemoryStore(
+            index={"dims": EMBED_DIMS, "embed": embeddings}
         )
-        return Services(graph=graph, retriever=retriever)
+        graph = build_graph(
+            model, tools, InMemorySaver(), store=store
+        )
+        return Services(
+            graph=graph,
+            retriever=retriever,
+            model=model,
+            memory_store=store,
+        )
 
     from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-    from langgraph.store.postgres import AsyncPostgresStore
+    from langgraph.store.base import TTLConfig
+    from langgraph.store.postgres.aio import (
+        AsyncPostgresStore,
+        PostgresIndexConfig,
+    )
 
     stack = AsyncExitStack()
     try:
@@ -182,7 +215,15 @@ async def build_services() -> Services:
             AsyncPostgresSaver.from_conn_string(DATABASE_URL)
         )
         store = await stack.enter_async_context(
-            AsyncPostgresStore.from_conn_string(DATABASE_URL)
+            AsyncPostgresStore.from_conn_string(
+                DATABASE_URL,
+                index=PostgresIndexConfig(
+                    dims=EMBED_DIMS, embed=embeddings
+                ),
+                ttl=TTLConfig(
+                    omit_expired=True, refresh_on_read=False
+                ),
+            )
         )
         await saver.setup()
         await store.setup()
@@ -194,6 +235,8 @@ async def build_services() -> Services:
         graph=graph,
         retriever=retriever,
         db_check=_check_db,
+        model=model,
+        memory_store=store,
         _closer=stack.aclose,
     )
 
@@ -344,7 +387,9 @@ def _tool_events(message) -> list[dict]:
                 "type": "tool_result",
                 "tool_call_id": getattr(message, "tool_call_id", "") or "",
                 "name": getattr(message, "name", ""),
-                "content": redact_pii(_message_text(message))[:_TOOL_RESULT_CHARS],
+                "content": compress_tool_content(
+                    redact_pii(_message_text(message)), _TOOL_RESULT_CHARS
+                ),
             }
         )
     return events
@@ -451,6 +496,48 @@ async def _prepare_thread(graph, config) -> None:
         await _reset_thread(graph, thread_id)
 
 
+async def _maybe_extract_memory(
+    services, user, text: str, messages
+) -> None:
+    """规则命中且模型未显式 save_memory 时,做一次结构化抽取写入。"""
+    if not ENABLE_AUTO_MEMORY or user is None or not text:
+        return
+    if not detect_memory_candidate(text):
+        return
+    if messages_used_save_memory(messages):
+        return
+    model = getattr(services, "model", None)
+    store = getattr(services, "memory_store", None)
+    if model is None or store is None:
+        return
+    try:
+        await asyncio.to_thread(
+            maybe_extract_and_save, model, store, user.user_id, text
+        )
+    except Exception as exc:  # noqa: BLE001 - 自动记忆失败不中断请求
+        logger.warning("自动记忆失败: %s", redact_pii(str(exc)))
+
+
+async def _post_turn_memory(
+    graph, config, services, user, user_text: str
+) -> None:
+    """流式结束后从 checkpoint 取本轮消息,按需做结构化记忆抽取。"""
+    if not ENABLE_AUTO_MEMORY or user is None or not user_text:
+        return
+    aget_state = getattr(graph, "aget_state", None)
+    if aget_state is None:
+        return
+    try:
+        state = await aget_state(config)
+        values = getattr(state, "values", None) or {}
+        messages = (
+            values.get("messages", []) if isinstance(values, dict) else []
+        )
+        await _maybe_extract_memory(services, user, user_text, messages)
+    except Exception as exc:  # noqa: BLE001 - 自动记忆失败不中断流
+        logger.warning("自动记忆失败: %s", redact_pii(str(exc)))
+
+
 async def _chat_events(
     graph,
     payload,
@@ -459,6 +546,8 @@ async def _chat_events(
     timeout,
     lock,
     context=None,
+    services=None,
+    user_text: str = "",
     skip_prepare: bool = False,
 ):
     """把 graph 流转换成 SSE 事件;负责串行、修复、超时、断连和异常上报。"""
@@ -524,6 +613,10 @@ async def _chat_events(
             interrupt = await _get_interrupt(graph, config)
             if interrupt:
                 yield sse({"type": "interrupt", **interrupt})
+            elif services is not None and user_text:
+                await _post_turn_memory(
+                    graph, config, services, context, user_text
+                )
             yield sse(
                 {
                     "type": "done",
@@ -674,6 +767,10 @@ def create_app(services: Services | None = None) -> FastAPI:
                     status_code=500, detail="chat failed"
                 ) from exc
             interrupt = await _get_interrupt(svc.graph, config)
+        if interrupt is None:
+            await _maybe_extract_memory(
+                svc, user, body.message, result.get("messages", [])
+            )
         return ChatResponse(
             answer=_extract_answer(result),
             sources=_extract_sources(result),
@@ -749,6 +846,7 @@ def create_app(services: Services | None = None) -> FastAPI:
                 REQUEST_TIMEOUT,
                 get_thread_lock(app, thread_id),
                 context=user,
+                services=svc,
                 skip_prepare=True,
             ),
             media_type="text/event-stream",
@@ -785,6 +883,8 @@ def create_app(services: Services | None = None) -> FastAPI:
                 REQUEST_TIMEOUT,
                 get_thread_lock(app, thread_id),
                 context=user,
+                services=svc,
+                user_text=body.message,
             ),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},

@@ -1,9 +1,15 @@
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    HumanMessage,
+    ToolMessage,
+)
 
 import main
+from auth import UserContext
 
 
 def test_ensure_prerequisites_requires_deepseek_key(monkeypatch):
@@ -41,11 +47,169 @@ def test_guard_input_allows_normal_question():
     assert main.guard_input("checkpointer 是什么") is True
 
 
+class ContextRecordingGraph:
+    def __init__(self):
+        self.contexts = []
+
+    def stream(self, payload, config, stream_mode, context=None, **kwargs):
+        self.contexts.append(context)
+        yield ("messages", (AIMessageChunk(content="ok"), {}))
+
+    def get_state(self, config):
+        return SimpleNamespace(interrupts=())
+
+
+def test_run_turn_passes_user_context():
+    graph = ContextRecordingGraph()
+    user = UserContext(user_id="user_alice")
+    main.run_turn(graph, {}, "hi", context=user)
+    assert graph.contexts == [user]
+
+
+def test_resolve_cli_user_defaults_to_alice():
+    assert main.resolve_cli_user([]).user_id == "user_alice"
+
+
+def test_resolve_cli_user_accepts_bob():
+    assert main.resolve_cli_user(["--user", "bob"]).user_id == "user_bob"
+
+
+def test_resolve_cli_user_rejects_unknown():
+    with pytest.raises(SystemExit):
+        main.resolve_cli_user(["--user", "mallory"])
+
+
+class StateGraph:
+    def __init__(self, messages=None, summary=""):
+        self.messages = messages or [HumanMessage(content="hi")]
+        self.summary = summary
+
+    def get_state(self, config):
+        values = {"messages": self.messages}
+        if self.summary:
+            values["summary"] = self.summary
+        return SimpleNamespace(values=values, interrupts=())
+
+
+def test_maybe_extract_turn_calls_when_enabled(monkeypatch):
+    calls = []
+    monkeypatch.setattr(main, "ENABLE_AUTO_MEMORY", True)
+    monkeypatch.setattr(
+        main, "maybe_extract_and_save", lambda *args: calls.append(args)
+    )
+    main.maybe_extract_turn(
+        object(),
+        object(),
+        UserContext(user_id="user_alice"),
+        StateGraph(),
+        {},
+        "请记住我叫小明",
+    )
+    assert calls
+    assert calls[0][2] == "user_alice"
+
+
+def test_maybe_extract_turn_skips_after_save_memory(monkeypatch):
+    calls = []
+    monkeypatch.setattr(main, "ENABLE_AUTO_MEMORY", True)
+    monkeypatch.setattr(
+        main, "maybe_extract_and_save", lambda *args: calls.append(args)
+    )
+    call = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "save_memory",
+                "args": {"key": "profile.name"},
+                "id": "m1",
+            }
+        ],
+    )
+    main.maybe_extract_turn(
+        object(),
+        object(),
+        UserContext(user_id="user_alice"),
+        StateGraph(messages=[call]),
+        {},
+        "请记住我叫小明",
+    )
+    assert calls == []
+
+
+def test_maybe_extract_turn_skips_when_disabled(monkeypatch):
+    calls = []
+    monkeypatch.setattr(main, "ENABLE_AUTO_MEMORY", False)
+    monkeypatch.setattr(
+        main, "maybe_extract_and_save", lambda *args: calls.append(args)
+    )
+    main.maybe_extract_turn(
+        object(),
+        object(),
+        UserContext(user_id="user_alice"),
+        StateGraph(),
+        {},
+        "请记住我叫小明",
+    )
+    assert calls == []
+
+
+def test_finalize_session_writes_episode(monkeypatch):
+    calls = []
+    monkeypatch.setattr(main, "ENABLE_AUTO_MEMORY", True)
+    monkeypatch.setattr(
+        main,
+        "summarize_and_save",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+    config = {"configurable": {"thread_id": "t1"}}
+    main.finalize_session(
+        object(),
+        object(),
+        UserContext(user_id="user_alice"),
+        StateGraph(summary="旧对话摘要"),
+        config,
+    )
+    assert calls
+    args, kwargs = calls[0]
+    assert args[2] == "user_alice"
+    assert kwargs["thread_id"] == "t1"
+    assert any(
+        "旧对话摘要" in str(getattr(message, "content", ""))
+        for message in args[3]
+    )
+
+
+def test_finalize_session_skips_interrupt(monkeypatch):
+    calls = []
+    monkeypatch.setattr(main, "ENABLE_AUTO_MEMORY", True)
+    monkeypatch.setattr(
+        main,
+        "summarize_and_save",
+        lambda *args, **kwargs: calls.append(args),
+    )
+
+    class InterruptedGraph:
+        def get_state(self, config):
+            return SimpleNamespace(
+                values={"messages": [HumanMessage(content="hi")]},
+                interrupts=(object(),),
+            )
+
+    main.finalize_session(
+        object(),
+        object(),
+        UserContext(user_id="user_alice"),
+        InterruptedGraph(),
+        {},
+    )
+    assert calls == []
+
+
 class FakeGraph:
     def __init__(self, chunk):
         self.chunk = chunk
 
-    def stream(self, payload, config, stream_mode):
+    def stream(self, payload, config, stream_mode, **kwargs):
         yield ("messages", (self.chunk, {}))
 
     def get_state(self, config):
@@ -63,7 +227,7 @@ def test_run_turn_prints_ai_chunk(capsys):
 
 
 class FakeToolGraph:
-    def stream(self, payload, config, stream_mode):
+    def stream(self, payload, config, stream_mode, **kwargs):
         yield (
             "updates",
             {

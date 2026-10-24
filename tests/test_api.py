@@ -13,7 +13,7 @@ from langchain_core.messages import (
 
 import api
 from api import create_app
-from auth import sign_token
+from auth import UserContext, sign_token
 from tests.fakes import RecordingGraph, auth_client, bearer, fake_services
 
 
@@ -261,6 +261,7 @@ def test_chat_stream_tool_events_include_call_ids():
     result = next(event for event in events if event["type"] == "tool_result")
     assert call["id"] == "call-1"
     assert result["tool_call_id"] == "call-1"
+    assert result["content"].endswith("...(已截断)")
 
 
 class ToolInMessagesGraph:
@@ -507,3 +508,113 @@ def test_tool_events_redact_pii():
     payload = json.dumps(events, ensure_ascii=False)
     assert "alice@example.com" not in payload
     assert "[EMAIL]" in payload
+
+
+async def test_maybe_extract_memory_runs_for_candidate(monkeypatch):
+    calls = []
+    monkeypatch.setattr(api, "ENABLE_AUTO_MEMORY", True)
+    monkeypatch.setattr(
+        api, "maybe_extract_and_save", lambda *args: calls.append(args)
+    )
+    services = fake_services()
+    services.model = object()
+    services.memory_store = object()
+    await api._maybe_extract_memory(
+        services,
+        UserContext(user_id="user_alice"),
+        "请记住我叫小明",
+        [],
+    )
+    assert calls
+    assert calls[0][2] == "user_alice"
+
+
+async def test_maybe_extract_memory_skips_non_candidate(monkeypatch):
+    calls = []
+    monkeypatch.setattr(api, "ENABLE_AUTO_MEMORY", True)
+    monkeypatch.setattr(
+        api, "maybe_extract_and_save", lambda *args: calls.append(args)
+    )
+    services = fake_services()
+    services.model = object()
+    services.memory_store = object()
+    await api._maybe_extract_memory(
+        services,
+        UserContext(user_id="user_alice"),
+        "checkpointer 是什么",
+        [],
+    )
+    assert calls == []
+
+
+async def test_maybe_extract_memory_skips_after_save_memory(monkeypatch):
+    calls = []
+    monkeypatch.setattr(api, "ENABLE_AUTO_MEMORY", True)
+    monkeypatch.setattr(
+        api, "maybe_extract_and_save", lambda *args: calls.append(args)
+    )
+    services = fake_services()
+    services.model = object()
+    services.memory_store = object()
+    call = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "save_memory",
+                "args": {"key": "profile.name", "value": "小明"},
+                "id": "m1",
+            }
+        ],
+    )
+    await api._maybe_extract_memory(
+        services,
+        UserContext(user_id="user_alice"),
+        "请记住我叫小明",
+        [call],
+    )
+    assert calls == []
+
+
+async def test_post_turn_memory_reads_state(monkeypatch):
+    calls = []
+    monkeypatch.setattr(api, "ENABLE_AUTO_MEMORY", True)
+    monkeypatch.setattr(
+        api, "maybe_extract_and_save", lambda *args: calls.append(args)
+    )
+    services = fake_services()
+    services.model = object()
+    services.memory_store = object()
+
+    class StateGraph:
+        async def aget_state(self, config):
+            return SimpleNamespace(
+                values={"messages": [HumanMessage(content="hi")]}
+            )
+
+    await api._post_turn_memory(
+        StateGraph(),
+        {},
+        services,
+        UserContext(user_id="user_alice"),
+        "请记住我叫小明",
+    )
+    assert calls
+
+
+def test_chat_triggers_candidate_extraction(monkeypatch):
+    calls = []
+    monkeypatch.setattr(api, "ENABLE_AUTO_MEMORY", True)
+    monkeypatch.setattr(
+        api, "maybe_extract_and_save", lambda *args: calls.append(args)
+    )
+    services = fake_services()
+    services.model = object()
+    services.memory_store = object()
+    client, token = auth_client(services)
+    response = client.post(
+        "/chat",
+        headers=bearer(token),
+        json={"message": "请记住我叫小明", "session_id": "s1"},
+    )
+    assert response.status_code == 200
+    assert calls

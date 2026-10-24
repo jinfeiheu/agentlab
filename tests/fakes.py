@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from types import SimpleNamespace
 
+from langchain_core.embeddings import Embeddings
 from langchain_core.messages import AIMessage, AIMessageChunk
 
 
@@ -45,7 +46,7 @@ class FakeRetriever:
         return self.docs
 
 
-class FakeEmbeddings:
+class FakeEmbeddings(Embeddings):
     """确定性向量,供 InMemoryStore 的索引使用。"""
 
     def __init__(self, dim: int = 4):
@@ -106,6 +107,8 @@ class FakeServices:
     graph: object
     retriever: object = None
     db_check: object = None
+    model: object = None
+    memory_store: object = None
 
 
 def fake_services(graph=None, retriever=None) -> FakeServices:

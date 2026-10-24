@@ -26,6 +26,8 @@ DATABASE_URL = os.getenv(
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-flash")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "bge-m3")
+# 与 bge-m3 的输出维度保持一致;Store 语义索引与文档向量共用该维度。
+EMBED_DIMS = int(os.getenv("EMBED_DIMS", "1024"))
 AUTH_SECRET = os.getenv("AUTH_SECRET", "dev-only-change-me-please-replace-me")
 TRACING_ENABLED = _env_bool("TRACING_ENABLED", False)
 PHOENIX_ENDPOINT = os.getenv(
@@ -51,3 +53,5 @@ REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "60"))
 RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "30"))
 CONTEXT_MAX_TOKENS = int(os.getenv("CONTEXT_MAX_TOKENS", "6000"))
 ENABLE_AUTO_MEMORY = _env_bool("ENABLE_AUTO_MEMORY", False)
+# 自动 episode 记忆的保留天数;Postgres Store 支持 TTL,InMemoryStore 会忽略。
+MEMORY_EPISODE_TTL_DAYS = float(os.getenv("MEMORY_EPISODE_TTL_DAYS", "30"))
