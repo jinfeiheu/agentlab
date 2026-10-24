@@ -11,9 +11,9 @@ RUN pip install --no-cache-dir --index-url "$PIP_INDEX_URL" uv
 
 WORKDIR /app
 
-# 先装依赖,利用镜像层缓存;api.py 运行时需要 serve 与 observability 组
+# 先装依赖,利用镜像层缓存;api.py 运行时需要 serve/observability/rag 组
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev --group serve --group observability
+RUN uv sync --frozen --no-dev --group serve --group observability --group rag
 
 COPY . .
 

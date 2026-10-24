@@ -8,10 +8,18 @@ from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
-from config import DOCS_DIR
+from config import (
+    DOCS_DIR,
+    LLM_RERANK_ENABLED,
+    RAG_MODE,
+    RERANK_DEVICE,
+    RERANK_ENABLED,
+    RERANK_MODEL,
+)
 from graph import SYSTEM_PROMPT, build_graph, build_simple_graph
 from models import build_chat_model
 from rag import build_inmemory_retriever
+from retrieval import build_pgvector_hybrid_retriever, build_reranker
 from tools import calculator, make_search_tool, send_report
 from tracing import setup_tracing, shutdown_tracing
 
@@ -35,12 +43,15 @@ def ensure_prerequisites() -> None:
 
 
 def build_retriever_or_exit():
-    """构建检索器,把 Ollama 连接错误转成可读提示。"""
+    """构建检索器,把 Ollama/Postgres 连接错误转成可读提示。"""
     try:
+        if RAG_MODE == "hybrid":
+            return build_pgvector_hybrid_retriever()
         return build_inmemory_retriever(DOCS_DIR)
     except Exception as exc:
         raise SystemExit(
             "语料索引构建失败,请确认 Ollama 已启动且已拉取 bge-m3。\n"
+            "hybrid 模式还需要 Postgres 中已执行 ingest.py。\n"
             f"原始错误:{exc}"
         ) from exc
 
@@ -118,7 +129,17 @@ def _run_cli() -> None:
     """构建检索器与图,进入终端交互循环。"""
     print("正在构建知识库索引(首次会加载 bge-m3)...")
     retriever = build_retriever_or_exit()
-    tools = [calculator, make_search_tool(retriever), send_report]
+    reranker = build_reranker(
+        use_model=RERANK_ENABLED,
+        use_llm=LLM_RERANK_ENABLED,
+        model_name=RERANK_MODEL,
+        device=RERANK_DEVICE,
+    )
+    tools = [
+        calculator,
+        make_search_tool(retriever, reranker=reranker),
+        send_report,
+    ]
     checkpointer = InMemorySaver()
     model = build_chat_model(temperature=0)
 

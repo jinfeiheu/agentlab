@@ -3,7 +3,6 @@
 import argparse
 import json
 import os
-import re
 import time
 import uuid
 from dataclasses import asdict, dataclass
@@ -12,7 +11,13 @@ from pathlib import Path
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
-from config import DEEPSEEK_MODEL, DOCS_DIR, GOLDEN_PATH
+from config import (
+    DEEPSEEK_MODEL,
+    DOCS_DIR,
+    GOLDEN_PATH,
+    RERANK_DEVICE,
+    RERANK_MODEL,
+)
 from eval.data import GoldenItem, load_golden
 from eval.judge import build_judge, judge_answer
 from eval.retrieval_metrics import aggregate
@@ -20,6 +25,11 @@ from graph import build_graph
 from metrics import MetricsRecorder, Usage, usage_from_message
 from models import build_chat_model
 from rag import build_inmemory_retriever, format_docs
+from retrieval import (
+    build_pgvector_hybrid_retriever,
+    build_reranker,
+    extract_sources,
+)
 from tools import calculator, make_search_tool, send_report
 
 _REFUSAL_MARKERS = (
@@ -113,12 +123,7 @@ def evaluate(
             doc.metadata.get("chunk_id", "") for doc in docs
         ]
         pre_retrieval_labels = sorted(
-            set(
-                re.findall(
-                    r"来源:([^\]]+)\]",
-                    format_docs(docs) if docs else "",
-                )
-            )
+            set(extract_sources(format_docs(docs) if docs else ""))
         )
 
         started = time.perf_counter()
@@ -155,9 +160,7 @@ def evaluate(
             and isinstance(message.content, str)
         ]
         contexts = list(dict.fromkeys(tool_contexts))
-        evidence_labels = sorted(
-            set(re.findall(r"来源:([^\]]+)\]", "\n".join(contexts)))
-        )
+        evidence_labels = sorted(set(extract_sources("\n".join(contexts))))
         tool_queries = [
             call.get("args", {}).get("query", "")
             for message in messages
@@ -315,28 +318,50 @@ def main() -> None:
         choices=["baseline", "hybrid"],
         default="baseline",
     )
-    parser.add_argument("--rerank", action="store_true")
+    parser.add_argument(
+        "--rerank",
+        action="store_true",
+        help="启用专用 cross-encoder rerank",
+    )
+    parser.add_argument(
+        "--llm-rerank",
+        action="store_true",
+        help="叠加 LLM rerank",
+    )
     args = parser.parse_args()
 
     if not os.getenv("DEEPSEEK_API_KEY"):
         raise SystemExit(
             "缺少 DEEPSEEK_API_KEY:请复制 .env.example 为 .env 并填入你的 DeepSeek Key。"
         )
-    if args.retriever != "baseline":
-        raise SystemExit("hybrid 检索在 Task 10 接入。")
-    if args.rerank:
-        raise SystemExit("rerank 在 Task 11 接入。")
-
     golden = load_golden(GOLDEN_PATH)
     if args.limit:
         golden = golden[: args.limit]
 
-    retriever = build_inmemory_retriever(DOCS_DIR)
-    tools = [calculator, make_search_tool(retriever), send_report]
+    retriever = (
+        build_pgvector_hybrid_retriever()
+        if args.retriever == "hybrid"
+        else build_inmemory_retriever(DOCS_DIR)
+    )
+    reranker = build_reranker(
+        use_model=args.rerank,
+        use_llm=args.llm_rerank,
+        model_name=RERANK_MODEL,
+        device=RERANK_DEVICE,
+    )
+    tools = [
+        calculator,
+        make_search_tool(retriever, reranker=reranker),
+        send_report,
+    ]
     graph = build_graph(
         build_chat_model(),
         tools,
         checkpointer=InMemorySaver(),
+    )
+    print(
+        f"评测:retriever={args.retriever}, "
+        f"rerank_model={args.rerank}, llm_rerank={args.llm_rerank}"
     )
     judge = build_judge()
     report = evaluate(

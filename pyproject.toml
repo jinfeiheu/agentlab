@@ -34,8 +34,18 @@ rag = [
   "psycopg[binary]>=3.2",
   "rank-bm25>=0.2.2",
   "jieba>=0.42",
+  "sentence-transformers>=3.0",
+  "torch>=2.2",
 ]
 mcp = ["mcp>=1.24,<2", "langchain-mcp-adapters>=0.3,<0.4"]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

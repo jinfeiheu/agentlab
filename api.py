@@ -22,13 +22,19 @@ from config import (
     BASE_DIR,
     DATABASE_URL,
     DOCS_DIR,
+    RAG_MODE,
     RATE_LIMIT_PER_MINUTE,
+    RERANK_DEVICE,
+    RERANK_ENABLED,
+    RERANK_MODEL,
+    LLM_RERANK_ENABLED,
     REQUEST_TIMEOUT,
     USE_DB,
 )
 from graph import build_graph
 from models import build_chat_model
 from rag import build_inmemory_retriever
+from retrieval import build_pgvector_hybrid_retriever, build_reranker
 from tools import calculator, make_search_tool, send_report
 from tracing import setup_tracing, shutdown_tracing
 
@@ -127,8 +133,22 @@ async def _check_db() -> None:
 
 async def build_services() -> Services:
     """构建真实依赖;USE_DB=true 时改用 Postgres checkpointer 与 Store。"""
-    retriever = build_inmemory_retriever(DOCS_DIR)
-    tools = [calculator, make_search_tool(retriever), send_report]
+    retriever = (
+        build_pgvector_hybrid_retriever()
+        if RAG_MODE == "hybrid"
+        else build_inmemory_retriever(DOCS_DIR)
+    )
+    reranker = build_reranker(
+        use_model=RERANK_ENABLED,
+        use_llm=LLM_RERANK_ENABLED,
+        model_name=RERANK_MODEL,
+        device=RERANK_DEVICE,
+    )
+    tools = [
+        calculator,
+        make_search_tool(retriever, reranker=reranker),
+        send_report,
+    ]
     model = build_chat_model(temperature=0)
     if not USE_DB:
         graph = build_graph(

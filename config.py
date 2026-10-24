@@ -33,7 +33,11 @@ PHOENIX_ENDPOINT = os.getenv(
 )
 RAG_TOP_K = int(os.getenv("RAG_TOP_K", "3"))
 RAG_MODE = os.getenv("RAG_MODE", "baseline")
-RERANK_ENABLED = _env_bool("RERANK_ENABLED", False)
+# 专用 cross-encoder reranker 默认开启;LLM rerank 默认关闭。
+RERANK_ENABLED = _env_bool("RERANK_ENABLED", True)
+RERANK_MODEL = os.getenv("RERANK_MODEL", "BAAI/bge-reranker-v2-m3")
+RERANK_DEVICE = os.getenv("RERANK_DEVICE", "cpu")
+LLM_RERANK_ENABLED = _env_bool("LLM_RERANK_ENABLED", False)
 USE_DB = _env_bool("USE_DB", False)
 USE_MCP = _env_bool("USE_MCP", False)
 PG_COLLECTION = os.getenv("PG_COLLECTION", "docs")
