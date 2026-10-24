@@ -79,6 +79,89 @@ def test_resolve_cli_user_rejects_unknown():
         main.resolve_cli_user(["--user", "mallory"])
 
 
+def test_cli_mode_prefers_multi():
+    assert main.cli_mode([]) == "graph"
+    assert main.cli_mode(["--simple"]) == "simple"
+    assert main.cli_mode(["--simple", "--multi"]) == "multi"
+
+
+class MultiCliGraph:
+    def __init__(self):
+        self.payloads = []
+
+    def stream(self, payload, config, stream_mode, context=None, **kwargs):
+        self.payloads.append(payload)
+        yield ("updates", {"supervisor": {"next": "researcher"}})
+        yield (
+            "updates",
+            {"researcher": {"research_notes": "notes", "steps": 1}},
+        )
+        yield ("updates", {"writer": {"draft": "draft", "steps": 2}})
+        yield ("updates", {"critic": {"review": "ok", "steps": 3}})
+
+    def get_state(self, config):
+        return SimpleNamespace(interrupts=())
+
+
+def test_run_turn_resets_scratchpad_and_shows_routes(capsys):
+    graph = MultiCliGraph()
+    main.run_turn(
+        graph,
+        {},
+        "问题",
+        reset_scratchpad=True,
+        multi=True,
+    )
+    payload = graph.payloads[0]
+    assert payload["research_notes"] == ""
+    assert payload["draft"] == ""
+    assert payload["review"] == ""
+    assert payload["steps"] == 0
+    output = capsys.readouterr().out
+    assert "supervisor -> researcher" in output
+    assert "researcher 完成" in output
+    assert "writer 草稿" in output
+    assert "critic: ok" in output
+
+
+def test_main_multi_uses_multi_agent_graph(monkeypatch):
+    calls = []
+
+    class FakeCliGraph:
+        def get_graph(self):
+            return SimpleNamespace(draw_mermaid=lambda: "")
+
+    def raise_eof(_prompt):
+        raise EOFError
+
+    monkeypatch.setattr(main.sys, "argv", ["main.py", "--multi", "--user", "alice"])
+    monkeypatch.setattr(main, "ensure_prerequisites", lambda: None)
+    monkeypatch.setattr(main, "setup_tracing", lambda: None)
+    monkeypatch.setattr(main, "shutdown_tracing", lambda: None)
+    monkeypatch.setattr(main, "build_retriever_or_exit", lambda: object())
+    monkeypatch.setattr(main, "build_chat_model", lambda **_: object())
+    monkeypatch.setattr(
+        main,
+        "build_multi_agent_graph",
+        lambda *args, **kwargs: calls.append("multi") or FakeCliGraph(),
+    )
+    monkeypatch.setattr(
+        main,
+        "build_graph",
+        lambda *args, **kwargs: pytest.fail("single graph used"),
+    )
+    monkeypatch.setattr(
+        main,
+        "build_simple_graph",
+        lambda *args, **kwargs: pytest.fail("simple graph used"),
+    )
+    monkeypatch.setattr("builtins.input", raise_eof)
+
+    main.main()
+
+    assert calls == ["multi"]
+
+
 class StateGraph:
     def __init__(self, messages=None, summary=""):
         self.messages = messages or [HumanMessage(content="hi")]

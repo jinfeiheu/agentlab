@@ -35,6 +35,7 @@ from memory import (
     summarize_and_save,
 )
 from models import build_chat_model, build_embeddings
+from multi_agent import build_multi_agent_graph
 from rag import build_inmemory_retriever
 from retrieval import build_pgvector_hybrid_retriever, build_reranker
 from security import check_input, redact_pii
@@ -84,6 +85,15 @@ def guard_input(text: str) -> bool:
     return False
 
 
+def cli_mode(argv: list[str]) -> str:
+    """--multi 优先于 --simple;默认手写单 Agent 图。"""
+    if "--multi" in argv:
+        return "multi"
+    if "--simple" in argv:
+        return "simple"
+    return "graph"
+
+
 def resolve_cli_user(argv: list[str]) -> UserContext:
     """解析 --user,把 demo 用户名绑定成 UserContext;默认 alice。"""
     username = "alice"
@@ -100,16 +110,28 @@ def resolve_cli_user(argv: list[str]) -> UserContext:
     return UserContext(user_id=user.user_id)
 
 
-def run_turn(graph, config, user_input: str, context=None) -> None:
-    """执行一轮对话:流式打印 token、工具事件,必要时处理 HITL 确认。"""
+def run_turn(
+    graph,
+    config,
+    user_input: str,
+    context=None,
+    reset_scratchpad: bool = False,
+    multi: bool = False,
+) -> None:
+    """执行一轮对话:单 Agent 流式 token,多 Agent 用 updates 展示路由。"""
     payload = {"messages": [("user", user_input)]}
+    if reset_scratchpad:
+        payload.update(
+            {"research_notes": "", "draft": "", "review": "", "steps": 0}
+        )
+    stream_modes = ["updates"] if multi else ["messages", "updates"]
     while True:
         print("助手 > ", end="", flush=True)
         for mode, data in graph.stream(
             payload,
             config=config,
             context=context,
-            stream_mode=["messages", "updates"],
+            stream_mode=stream_modes,
         ):
             if mode == "messages":
                 chunk, _metadata = data
@@ -120,6 +142,31 @@ def run_turn(graph, config, user_input: str, context=None) -> None:
                 ):
                     print(chunk.content, end="", flush=True)
             elif mode == "updates":
+                if multi:
+                    for node_name, update in (data or {}).items():
+                        if not isinstance(update, dict):
+                            continue
+                        if node_name == "supervisor":
+                            route = update.get("next")
+                            if route:
+                                print(
+                                    f"\n🧭 supervisor -> {route}",
+                                    flush=True,
+                                )
+                        elif node_name == "researcher":
+                            print("\n🔎 researcher 完成", flush=True)
+                        elif node_name == "writer":
+                            print(
+                                f"\n✍️ writer 草稿:\n{update.get('draft', '')}",
+                                flush=True,
+                            )
+                        elif node_name == "critic":
+                            print(
+                                f"\n🧐 critic: "
+                                f"{str(update.get('review', ''))[:120]}",
+                                flush=True,
+                            )
+                    continue
                 for update in data.values():
                     if not isinstance(update, dict):
                         continue
@@ -220,36 +267,47 @@ def _run_cli() -> None:
     """构建检索器与图,进入终端交互循环。"""
     print("正在构建知识库索引(首次会加载 bge-m3)...")
     retriever = build_retriever_or_exit()
-    reranker = build_reranker(
-        use_model=RERANK_ENABLED,
-        use_llm=LLM_RERANK_ENABLED,
-        model_name=RERANK_MODEL,
-        device=RERANK_DEVICE,
-    )
     user = resolve_cli_user(sys.argv[1:])
     store = InMemoryStore(
         index={"dims": EMBED_DIMS, "embed": build_embeddings()}
     )
-    tools = [
-        calculator,
-        make_search_tool(retriever, reranker=reranker),
-        get_ticket,
-        save_memory,
-        search_memory,
-        send_report,
-    ]
     checkpointer = InMemorySaver()
     model = build_chat_model(temperature=0)
+    mode = cli_mode(sys.argv[1:])
 
-    use_simple = "--simple" in sys.argv[1:]
-    graph = (
-        build_simple_graph(model, tools, checkpointer, store=store)
-        if use_simple
-        else build_graph(model, tools, checkpointer, store=store)
-    )
+    if mode == "multi":
+        graph = build_multi_agent_graph(
+            model, retriever, checkpointer, store=store
+        )
+        mode_name = "Supervisor 多 Agent"
+    else:
+        reranker = build_reranker(
+            use_model=RERANK_ENABLED,
+            use_llm=LLM_RERANK_ENABLED,
+            model_name=RERANK_MODEL,
+            device=RERANK_DEVICE,
+        )
+        tools = [
+            calculator,
+            make_search_tool(retriever, reranker=reranker),
+            get_ticket,
+            save_memory,
+            search_memory,
+            send_report,
+        ]
+        graph = (
+            build_simple_graph(model, tools, checkpointer, store=store)
+            if mode == "simple"
+            else build_graph(model, tools, checkpointer, store=store)
+        )
+        mode_name = (
+            "create_agent 高层封装"
+            if mode == "simple"
+            else "手写 StateGraph"
+        )
+
     print(graph.get_graph().draw_mermaid())
     config = {"configurable": {"thread_id": str(uuid.uuid4())}}
-    mode_name = "create_agent 高层封装" if use_simple else "手写 StateGraph"
     print(
         f"🤖 LangChain × LangGraph 问答机器人"
         f"(模式:{mode_name},用户:{user.user_id})"
@@ -280,7 +338,14 @@ def _run_cli() -> None:
         if not guard_input(text):
             continue
         try:
-            run_turn(graph, config, text, context=user)
+            run_turn(
+                graph,
+                config,
+                text,
+                context=user,
+                reset_scratchpad=mode == "multi",
+                multi=mode == "multi",
+            )
             maybe_extract_turn(model, store, user, graph, config, text)
         except Exception as exc:
             print(f"\n调用失败:{redact_pii(str(exc))}")
