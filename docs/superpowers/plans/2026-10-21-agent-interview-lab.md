@@ -1082,6 +1082,46 @@ Expected: 配置测试 PASS；集成测试能列出 `search_docs` 并调用。
 
 ---
 
+### Task 12.5: MCP 通用性演示（多工具 / 多 server / 跨客户端）
+
+> Task 12 只暴露一个 `search_docs`，足以验证协议连通性，但体现不出 MCP 的通用性。本任务在公开、只读的前提下增加多工具、第二个 MCP server、客户端聚合、跨客户端配置和 transport 切换。ticket/memory 仍不进入公共 MCP。
+
+**Files:**
+- Modify: `mcp_server.py`（新增 `list_sources`、`doc_stats`；`--transport stdio|streamable-http`，HTTP 默认 8811）
+- Create: `mcp_utils_server.py`（`calculator`、`word_count`；同样支持两种 transport）
+- Modify: `mcp_client.py`（两个 server 配置、`build_mcp_config()`、`MCP_TRANSPORT`、聚合与分组演示）
+- Modify: `api.py`（USE_MCP 时使用聚合工具，要求 `search_docs` + `calculator`；不再添加本地 calculator，保留 send_report）
+- Modify: `config.py`、`.env.example`（`MCP_TRANSPORT=stdio|streamable_http`、`MCP_AGENTLAB_URL`、`MCP_UTILS_URL`）
+- Create: `docs/mcp-clients.md`（Claude Desktop/Code/Cursor 配置；stdio vs streamable HTTP；权限边界）
+- Modify: `tests/test_mcp.py`；Create: `tests/test_mcp_multi.py`
+
+**Interfaces:**
+- `mcp_server.py`: `search_docs`、`list_sources`、`doc_stats`（全部只读公开）
+- `mcp_utils_server.py`: `calculator`、`word_count`
+- `mcp_client.build_mcp_config() -> dict`：按 `MCP_TRANSPORT` 返回 stdio 或 streamable_http 配置
+- `mcp_client.load_mcp_tools() -> list[BaseTool]`：聚合两个 server
+- `config.MCP_TRANSPORT`（默认 `stdio`）、`config.MCP_AGENTLAB_URL`、`config.MCP_UTILS_URL`
+
+**Steps:**
+1. `mcp_server.py` 增加 `list_sources`（去重后的 `source#section`）和 `doc_stats`（文档数/chunk 数/按来源计数）；复用模块级 hybrid retriever。
+2. `mcp_utils_server.py` 用 FastMCP 暴露 `calculator`（复用 `tools.calculator`）和 `word_count`；只读、无副作用。
+3. 两个 server 都支持 `--transport stdio|streamable-http`；HTTP 模式 `host=0.0.0.0`、`port=8811/8812`、`streamable_http_path="/mcp"`；默认 stdio。
+4. `mcp_client.build_mcp_config()`：stdio 时两个 server 各启动 `uv run python ...`；HTTP 时用 `transport="streamable_http"` + URL；`load_mcp_tools()` 聚合。
+5. `api.py` USE_MCP：要求工具集合包含 `search_docs` 和 `calculator`，否则启动失败并给出中文错误；工具列表为 `[*mcp_tools, send_report]`（去掉本地 calculator，避免同名）。
+6. 写 `docs/mcp-clients.md`：Claude Desktop/Code/Cursor 的 `mcpServers` 配置、HTTP 启动命令、stdio vs HTTP 取舍、只暴露公共工具的边界。
+7. 测试：配置单测覆盖两种 transport 和两个 server；集成测试发现 5 个工具、调用 `search_docs`/`calculator`/`list_sources`；HTTP 集成可手动或 `RUN_INTEGRATION=1` 单独标记。
+8. 手工验证：`uv run python mcp_client.py` 列出两组工具并各调一个；`USE_MCP=true` API 分别问文档问题和算术问题。
+
+**Expected:**
+- 客户端发现至少 5 个工具，来自两个 server；
+- `USE_MCP=true` 时文档问题走 `search_docs`、算术走 MCP 的 `calculator`；
+- stdio 与 streamable HTTP 配置都能被客户端识别；
+- 公共 MCP 不暴露 ticket/memory；文档说明一个工具时本地函数更合适。
+
+**面试讲点：** MCP 的通用性来自协议边界/多客户端/多 server 聚合，而不是工具数量；什么时候不该用 MCP；stdio vs streamable HTTP 的取舍；公共工具与私有数据的权限边界。
+
+---
+
 ### Task 13: 安全（注入/PII/工具策略）+ 私有 ticket
 
 **Files:**
@@ -1416,6 +1456,7 @@ Expected: PASS。
 - [ ] 跨用户 ticket/memory 访问被拒绝，测试覆盖。
 - [ ] prompt injection/PII 测试通过；日志/trace 中无原始 PII。
 - [ ] `uv run python main.py --multi --user alice` 能演示 supervisor 路由。
+- [ ] `uv run python mcp_client.py` 能发现两个 server 的工具；`docs/mcp-clients.md` 的配置可被外部客户端使用。
 - [ ] README 每阶段补充“面试怎么讲”：问题、方案、取舍、指标、失败模式。
 - [ ] `git log --oneline` 显示 Task 0 基线提交 + 每个任务一个提交；没有跳过的任务。
 - [ ] 每个提交前都有用户确认记录（对话/ledger）。
