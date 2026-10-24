@@ -11,6 +11,13 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 DOCS_DIR = DATA_DIR / "docs"
 GOLDEN_PATH = BASE_DIR / "eval" / "golden.jsonl"
+# hard 评测与 easy 集完全隔离:独立语料、golden 和 pgvector collection。
+HARD_DOCS_DIR = Path(
+    os.getenv("HARD_DOCS_DIR", str(DATA_DIR / "docs_hard"))
+)
+HARD_GOLDEN_PATH = Path(
+    os.getenv("HARD_GOLDEN_PATH", str(BASE_DIR / "eval" / "golden_hard.jsonl"))
+)
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -49,9 +56,12 @@ MCP_AGENTLAB_URL = os.getenv(
 )
 MCP_UTILS_URL = os.getenv("MCP_UTILS_URL", "http://localhost:8812/mcp")
 PG_COLLECTION = os.getenv("PG_COLLECTION", "docs")
+PG_HARD_COLLECTION = os.getenv("PG_HARD_COLLECTION", "docs_hard")
 REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "60"))
 RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "30"))
 CONTEXT_MAX_TOKENS = int(os.getenv("CONTEXT_MAX_TOKENS", "6000"))
 ENABLE_AUTO_MEMORY = _env_bool("ENABLE_AUTO_MEMORY", False)
 # 自动 episode 记忆的保留天数;Postgres Store 支持 TTL,InMemoryStore 会忽略。
 MEMORY_EPISODE_TTL_DAYS = float(os.getenv("MEMORY_EPISODE_TTL_DAYS", "30"))
+# 评测裁判模型:默认 DeepSeek;可设为本地 Ollama 模型做跨模型对照。
+EVAL_JUDGE_MODEL = os.getenv("EVAL_JUDGE_MODEL", DEEPSEEK_MODEL)

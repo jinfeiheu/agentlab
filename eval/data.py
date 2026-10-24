@@ -2,12 +2,13 @@
 
 import json
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
 
 class GoldenItem(BaseModel):
-    """一条评测样本。"""
+    """一条评测样本;hard 集额外带难度、类别和参考答案。"""
 
     id: str
     question: str
@@ -16,6 +17,9 @@ class GoldenItem(BaseModel):
     relevant_chunk_ids: list[str] = Field(default_factory=list)
     key_points: list[str] = Field(default_factory=list)
     expected_tools: list[str] = Field(default_factory=list)
+    difficulty: Literal["easy", "medium", "hard"] = "easy"
+    category: str = "unspecified"
+    reference_answer: str | None = None
 
 
 def load_golden(path: Path) -> list[GoldenItem]:

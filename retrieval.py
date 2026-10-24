@@ -119,20 +119,26 @@ def build_hybrid_retriever(
     return HybridRetriever(vector_retriever, all_docs, top_n=top_n)
 
 
-def build_pgvector_hybrid_retriever() -> HybridRetriever:
-    """从 pgvector 的 docs collection 构建混合检索器。"""
+def build_pgvector_hybrid_retriever(
+    *,
+    docs_dir=None,
+    collection_name: str | None = None,
+) -> HybridRetriever:
+    """从 pgvector collection 构建混合检索器;默认仍使用 docs / PG_COLLECTION。"""
     from config import DATABASE_URL, DOCS_DIR, PG_COLLECTION
     from langchain_postgres import PGVector
     from models import build_embeddings
     from rag import load_documents, split_documents
 
+    docs_dir = docs_dir or DOCS_DIR
+    collection_name = collection_name or PG_COLLECTION
     store = PGVector(
         embeddings=build_embeddings(),
         connection=DATABASE_URL,
-        collection_name=PG_COLLECTION,
+        collection_name=collection_name,
         embedding_length=EMBEDDING_DIM,
     )
-    chunks = split_documents(load_documents(DOCS_DIR))
+    chunks = split_documents(load_documents(docs_dir))
     return build_hybrid_retriever(
         store.as_retriever(search_kwargs={"k": _CANDIDATES}),
         chunks,

@@ -53,6 +53,49 @@ def ndcg_at_k(
     return dcg / idcg if idcg else 0.0
 
 
+def context_precision(
+    retrieved_ids: list[str],
+    relevant_ids: set[str],
+    k: int,
+) -> float:
+    """Context Precision@k:每个命中位置之前 precision 的均值。
+
+    与 RAGAS 的定义一致:只在有命中的查询上计算,
+    分母是前 k 个结果里实际命中的相关片段数。
+    """
+    relevant = set(relevant_ids)
+    if not relevant or k <= 0:
+        return 0.0
+    hits = 0
+    score = 0.0
+    for rank, chunk_id in enumerate(retrieved_ids[:k], 1):
+        if chunk_id in relevant:
+            hits += 1
+            score += hits / rank
+    return score / hits if hits else 0.0
+
+
+def context_recall(
+    retrieved_ids: list[str],
+    relevant_ids: set[str],
+    k: int,
+) -> float:
+    """Context Recall@k:相关片段被前 k 个结果覆盖的比例。"""
+    return recall_at_k(retrieved_ids, relevant_ids, k)
+
+
+def citation_precision(
+    citations: list[str],
+    evidence_labels: set[str],
+) -> float:
+    """引用精确率:回答中每条来源引用被工具证据支持的比例。"""
+    unique = list(dict.fromkeys(citations))
+    if not unique:
+        return 0.0
+    supported = sum(1 for citation in unique if citation in evidence_labels)
+    return supported / len(unique)
+
+
 def aggregate(rows: list[dict], k: int) -> dict[str, float]:
     """对多条样本的检索指标取平均。"""
     if not rows:

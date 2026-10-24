@@ -56,11 +56,77 @@ def test_main_ingests_chunks(monkeypatch, capsys):
     monkeypatch.setattr(
         ingest,
         "build_vector_store",
-        lambda items, reset=False: calls.append((items, reset)),
+        lambda items, reset=False, **kwargs: calls.append(
+            (items, reset, kwargs)
+        ),
     )
     ingest.main(reset=True)
-    assert calls == [(chunks, True)]
+    assert calls[0][0] == chunks
+    assert calls[0][1] is True
+    assert calls[0][2]["collection_name"] == PG_COLLECTION
     assert "1" in capsys.readouterr().out
+
+
+def test_build_vector_store_can_load_docs_dir(monkeypatch, tmp_path):
+    captured = {}
+    docs = [Document(page_content="a")]
+    chunks = [Document(page_content="a", metadata={"chunk_id": "a::0"})]
+
+    def fake_from_documents(documents, embedding, **kwargs):
+        captured["docs"] = documents
+        captured["kwargs"] = kwargs
+        return object()
+
+    monkeypatch.setattr(ingest.PGVector, "from_documents", fake_from_documents)
+    monkeypatch.setattr(ingest, "build_embeddings", lambda: "fake-embedding")
+    monkeypatch.setattr(ingest, "load_documents", lambda path: docs)
+    monkeypatch.setattr(ingest, "split_documents", lambda items: chunks)
+    ingest.build_vector_store(
+        docs_dir=tmp_path, collection_name="docs_hard"
+    )
+    assert captured["docs"] == chunks
+    assert captured["kwargs"]["collection_name"] == "docs_hard"
+
+
+def test_build_vector_store_accepts_collection_override(monkeypatch):
+    captured = {}
+
+    def fake_from_documents(documents, embedding, **kwargs):
+        captured["kwargs"] = kwargs
+        return object()
+
+    monkeypatch.setattr(ingest.PGVector, "from_documents", fake_from_documents)
+    monkeypatch.setattr(ingest, "build_embeddings", lambda: "fake-embedding")
+    ingest.build_vector_store(
+        [Document(page_content="a")], collection_name="docs_hard"
+    )
+    assert captured["kwargs"]["collection_name"] == "docs_hard"
+
+
+def test_main_accepts_docs_dir_and_collection(monkeypatch, tmp_path, capsys):
+    seen = {}
+    monkeypatch.setattr(
+        ingest,
+        "load_documents",
+        lambda path: seen.setdefault("docs_dir", path) and [Document(page_content="a")],
+    )
+    monkeypatch.setattr(
+        ingest, "split_documents", lambda docs: [Document(page_content="a")]
+    )
+    monkeypatch.setattr(
+        ingest,
+        "build_vector_store",
+        lambda items, reset=False, **kwargs: seen.setdefault(
+            "collection", kwargs.get("collection_name")
+        ),
+    )
+    ingest.main(
+        docs_dir=tmp_path, collection_name="docs_hard", reset=True
+    )
+    assert seen["docs_dir"] == tmp_path
+    assert seen["collection"] == "docs_hard"
+    out = capsys.readouterr().out
+    assert "docs_hard" in out
 
 
 @pytest.mark.integration
