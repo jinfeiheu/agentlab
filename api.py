@@ -30,6 +30,7 @@ from config import (
     LLM_RERANK_ENABLED,
     REQUEST_TIMEOUT,
     USE_DB,
+    USE_MCP,
 )
 from graph import build_graph
 from models import build_chat_model
@@ -133,22 +134,31 @@ async def _check_db() -> None:
 
 async def build_services() -> Services:
     """构建真实依赖;USE_DB=true 时改用 Postgres checkpointer 与 Store。"""
-    retriever = (
-        build_pgvector_hybrid_retriever()
-        if RAG_MODE == "hybrid"
-        else build_inmemory_retriever(DOCS_DIR)
-    )
-    reranker = build_reranker(
-        use_model=RERANK_ENABLED,
-        use_llm=LLM_RERANK_ENABLED,
-        model_name=RERANK_MODEL,
-        device=RERANK_DEVICE,
-    )
-    tools = [
-        calculator,
-        make_search_tool(retriever, reranker=reranker),
-        send_report,
-    ]
+    retriever = None
+    if USE_MCP:
+        from mcp_client import load_mcp_tools
+
+        mcp_tools = await load_mcp_tools()
+        if not any(tool.name == "search_docs" for tool in mcp_tools):
+            raise RuntimeError("MCP server 未提供 search_docs 工具")
+        tools = [calculator, *mcp_tools, send_report]
+    else:
+        retriever = (
+            build_pgvector_hybrid_retriever()
+            if RAG_MODE == "hybrid"
+            else build_inmemory_retriever(DOCS_DIR)
+        )
+        reranker = build_reranker(
+            use_model=RERANK_ENABLED,
+            use_llm=LLM_RERANK_ENABLED,
+            model_name=RERANK_MODEL,
+            device=RERANK_DEVICE,
+        )
+        tools = [
+            calculator,
+            make_search_tool(retriever, reranker=reranker),
+            send_report,
+        ]
     model = build_chat_model(temperature=0)
     if not USE_DB:
         graph = build_graph(

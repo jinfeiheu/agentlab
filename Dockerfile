@@ -13,7 +13,7 @@ WORKDIR /app
 
 # 先装依赖,利用镜像层缓存;api.py 运行时需要 serve/observability/rag 组
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev --group serve --group observability --group rag
+RUN uv sync --frozen --no-dev --group serve --group observability --group rag --group mcp
 
 COPY . .
 
