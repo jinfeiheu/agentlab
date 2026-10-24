@@ -36,6 +36,8 @@ from graph import build_graph
 from models import build_chat_model
 from rag import build_inmemory_retriever
 from retrieval import build_pgvector_hybrid_retriever, build_reranker
+from security import check_input, redact_pii
+from tickets import get_ticket
 from tools import calculator, make_search_tool, send_report
 from tracing import setup_tracing, shutdown_tracing
 
@@ -144,7 +146,8 @@ async def build_services() -> Services:
         }
         if missing:
             raise RuntimeError(f"MCP server 缺少工具:{sorted(missing)}")
-        tools = [*mcp_tools, send_report]
+        # 私有 ticket 留在本地进程,只把公共检索/计算交给 MCP。
+        tools = [*mcp_tools, get_ticket, send_report]
     else:
         retriever = (
             build_pgvector_hybrid_retriever()
@@ -160,6 +163,7 @@ async def build_services() -> Services:
         tools = [
             calculator,
             make_search_tool(retriever, reranker=reranker),
+            get_ticket,
             send_report,
         ]
     model = build_chat_model(temperature=0)
@@ -197,6 +201,16 @@ async def build_services() -> Services:
 def sse(payload: dict) -> str:
     """把一个事件编码成 SSE data 帧。"""
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+def _refusal_events(message: str):
+    """把输入拒绝包装成与正常流一致的 token + done 事件。"""
+
+    async def events():
+        yield sse({"type": "token", "text": message})
+        yield sse({"type": "done", "sources": []})
+
+    return events()
 
 
 def _content_text(content) -> str:
@@ -296,9 +310,20 @@ async def _get_interrupt(graph, config) -> dict | None:
     try:
         state = await aget_state(config)
     except Exception as exc:  # noqa: BLE001 - 读状态失败不影响已有回答
-        logger.warning("读取 interrupt 状态失败: %s", exc)
+        logger.warning("读取 interrupt 状态失败: %s", redact_pii(str(exc)))
         return None
     return _interrupt_payload(state)
+
+
+def _redact_value(value):
+    """递归脱敏工具参数/结果里的字符串,前端展示不出现原始 PII。"""
+    if isinstance(value, str):
+        return redact_pii(value)
+    if isinstance(value, dict):
+        return {key: _redact_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_redact_value(item) for item in value]
+    return value
 
 
 def _tool_events(message) -> list[dict]:
@@ -310,7 +335,7 @@ def _tool_events(message) -> list[dict]:
                 "type": "tool_call",
                 "id": call.get("id") or "",
                 "name": call.get("name", ""),
-                "args": call.get("args", {}),
+                "args": _redact_value(call.get("args", {})),
             }
         )
     if isinstance(message, ToolMessage) or getattr(message, "type", None) == "tool":
@@ -319,7 +344,7 @@ def _tool_events(message) -> list[dict]:
                 "type": "tool_result",
                 "tool_call_id": getattr(message, "tool_call_id", "") or "",
                 "name": getattr(message, "name", ""),
-                "content": _message_text(message)[:_TOOL_RESULT_CHARS],
+                "content": redact_pii(_message_text(message))[:_TOOL_RESULT_CHARS],
             }
         )
     return events
@@ -381,7 +406,9 @@ async def _prepare_thread(graph, config) -> None:
     try:
         state = await aget_state(config)
     except Exception as exc:  # noqa: BLE001 - 状态读失败时宁可重置
-        logger.warning("读取会话 %s 状态失败,重置: %s", thread_id, exc)
+        logger.warning(
+            "读取会话 %s 状态失败,重置: %s", thread_id, redact_pii(str(exc))
+        )
         await _reset_thread(graph, thread_id)
         return
     if state is None:
@@ -418,12 +445,21 @@ async def _prepare_thread(graph, config) -> None:
         await aupdate_state(config, {"messages": missing}, as_node="tools")
         logger.warning("会话 %s 补齐了 %d 个中断的工具调用", thread_id, len(missing))
     except Exception as exc:  # noqa: BLE001 - 修复失败则重置
-        logger.warning("修复会话 %s 失败,重置: %s", thread_id, exc)
+        logger.warning(
+            "修复会话 %s 失败,重置: %s", thread_id, redact_pii(str(exc))
+        )
         await _reset_thread(graph, thread_id)
 
 
 async def _chat_events(
-    graph, payload, config, request, timeout, lock, skip_prepare: bool = False
+    graph,
+    payload,
+    config,
+    request,
+    timeout,
+    lock,
+    context=None,
+    skip_prepare: bool = False,
 ):
     """把 graph 流转换成 SSE 事件;负责串行、修复、超时、断连和异常上报。"""
     sources: list[str] = []
@@ -440,7 +476,10 @@ async def _chat_events(
         try:
             async with aclosing(
                 graph.astream(
-                    payload, config=config, stream_mode=["messages", "updates"]
+                    payload,
+                    config=config,
+                    context=context,
+                    stream_mode=["messages", "updates"],
                 )
             ) as stream:
                 iterator = stream.__aiter__()
@@ -496,7 +535,7 @@ async def _chat_events(
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - 流内错误以事件返回,不中断连接
-            yield sse({"type": "error", "message": str(exc)})
+            yield sse({"type": "error", "message": redact_pii(str(exc))})
 
 
 def get_current_user(
@@ -547,8 +586,10 @@ def create_app(services: Services | None = None) -> FastAPI:
                 try:
                     app.state.services = await build_services()
                 except Exception as exc:  # noqa: BLE001 - 启动失败降级为 503
-                    logger.error("服务初始化失败: %s", exc)
-                    app.state.startup_error = f"服务初始化失败: {exc}"
+                    logger.error("服务初始化失败: %s", redact_pii(str(exc)))
+                    app.state.startup_error = (
+                        f"服务初始化失败: {redact_pii(str(exc))}"
+                    )
             yield
         finally:
             current = app.state.services
@@ -588,7 +629,9 @@ def create_app(services: Services | None = None) -> FastAPI:
                 if inspect.isawaitable(result):
                     await result
             except Exception as exc:  # noqa: BLE001 - 健康检查失败统一 503
-                logger.warning("数据库健康检查失败: %s", exc)
+                logger.warning(
+                    "数据库健康检查失败: %s", redact_pii(str(exc))
+                )
                 raise HTTPException(
                     status_code=503, detail="数据库不可用"
                 ) from exc
@@ -606,6 +649,9 @@ def create_app(services: Services | None = None) -> FastAPI:
     ) -> ChatResponse:
         if not app.state.limiter.allow(user.user_id):
             raise HTTPException(status_code=429, detail="rate limit exceeded")
+        decision = check_input(body.message)
+        if not decision.allowed:
+            return ChatResponse(answer=decision.reason, sources=[])
         thread_id = f"{user.user_id}:{body.session_id}"
         config = {"configurable": {"thread_id": thread_id}}
         async with get_thread_lock(app, thread_id):
@@ -613,7 +659,9 @@ def create_app(services: Services | None = None) -> FastAPI:
             try:
                 result = await asyncio.wait_for(
                     svc.graph.ainvoke(
-                        {"messages": [("user", body.message)]}, config=config
+                        {"messages": [("user", body.message)]},
+                        config=config,
+                        context=user,
                     ),
                     timeout=REQUEST_TIMEOUT,
                 )
@@ -657,7 +705,9 @@ def create_app(services: Services | None = None) -> FastAPI:
             try:
                 result = await asyncio.wait_for(
                     svc.graph.ainvoke(
-                        Command(resume=body.answer), config=config
+                        Command(resume=body.answer),
+                        config=config,
+                        context=user,
                     ),
                     timeout=REQUEST_TIMEOUT,
                 )
@@ -698,6 +748,7 @@ def create_app(services: Services | None = None) -> FastAPI:
                 request,
                 REQUEST_TIMEOUT,
                 get_thread_lock(app, thread_id),
+                context=user,
                 skip_prepare=True,
             ),
             media_type="text/event-stream",
@@ -713,6 +764,16 @@ def create_app(services: Services | None = None) -> FastAPI:
     ) -> StreamingResponse:
         if not app.state.limiter.allow(user.user_id):
             raise HTTPException(status_code=429, detail="rate limit exceeded")
+        decision = check_input(body.message)
+        if not decision.allowed:
+            return StreamingResponse(
+                _refusal_events(decision.reason),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                },
+            )
         thread_id = f"{user.user_id}:{body.session_id}"
         config = {"configurable": {"thread_id": thread_id}}
         return StreamingResponse(
@@ -723,6 +784,7 @@ def create_app(services: Services | None = None) -> FastAPI:
                 request,
                 REQUEST_TIMEOUT,
                 get_thread_lock(app, thread_id),
+                context=user,
             ),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},

@@ -1,11 +1,25 @@
+import pytest
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
+from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
 from graph import build_graph
 from tools import calculator, send_report
+
+
+@tool
+def unlisted_tool() -> str:
+    """故意不在安全白名单里的工具。"""
+    return "should not be registered"
+
+
+def test_graph_rejects_tool_outside_allowlist():
+    model = ScriptedModel(responses=[AIMessage(content="ok")])
+    with pytest.raises(RuntimeError, match="白名单"):
+        build_graph(model, [calculator, unlisted_tool])
 
 
 class ScriptedModel(BaseChatModel):
@@ -83,3 +97,30 @@ def test_send_report_cancel():
     graph.invoke({"messages": [("user", "发送周报")]}, config)
     result = graph.invoke(Command(resume="n"), config)
     assert any(m.type == "tool" and "已取消" in m.content for m in result["messages"])
+
+
+def test_graph_denies_unknown_tool():
+    model = ScriptedModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "delete_everything",
+                        "args": {},
+                        "id": "c9",
+                    }
+                ],
+            ),
+            AIMessage(content="已拒绝"),
+        ]
+    )
+    graph = build_graph(model, [calculator])
+    result = graph.invoke(
+        {"messages": [("user", "删除全部数据")]},
+        {"configurable": {"thread_id": "t9"}},
+    )
+    tool_messages = [m for m in result["messages"] if m.type == "tool"]
+    assert tool_messages
+    assert "拒绝" in tool_messages[0].content
+    assert result["messages"][-1].content == "已拒绝"

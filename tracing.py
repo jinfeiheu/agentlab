@@ -14,6 +14,7 @@ from opentelemetry.sdk.trace.export import (
 )
 
 from config import PHOENIX_ENDPOINT, TRACING_ENABLED
+from security import redact_pii
 
 _provider: TracerProvider | None = None
 _instrumentor: LangChainInstrumentor | None = None
@@ -53,7 +54,7 @@ def setup_tracing(exporter: SpanExporter | None = None) -> TracerProvider:
 
 @contextmanager
 def span(name: str, **attributes: Any) -> Iterator[trace.Span]:
-    """创建手动 span;属性值统一转成字符串,不写入原始用户输入。"""
+    """创建手动 span;属性值统一转成字符串,并脱敏 PII。"""
     tracer = (
         _provider.get_tracer(__name__)
         if _provider is not None
@@ -61,7 +62,7 @@ def span(name: str, **attributes: Any) -> Iterator[trace.Span]:
     )
     with tracer.start_as_current_span(name) as current_span:
         for key, value in attributes.items():
-            current_span.set_attribute(key, str(value))
+            current_span.set_attribute(key, redact_pii(str(value)))
         yield current_span
 
 

@@ -20,6 +20,7 @@ from graph import SYSTEM_PROMPT, build_graph, build_simple_graph
 from models import build_chat_model
 from rag import build_inmemory_retriever
 from retrieval import build_pgvector_hybrid_retriever, build_reranker
+from security import check_input, redact_pii
 from tools import calculator, make_search_tool, send_report
 from tracing import setup_tracing, shutdown_tracing
 
@@ -56,6 +57,15 @@ def build_retriever_or_exit():
         ) from exc
 
 
+def guard_input(text: str) -> bool:
+    """输入安全检查;拒绝时打印中文原因并返回 False。"""
+    decision = check_input(text)
+    if decision.allowed:
+        return True
+    print(decision.reason)
+    return False
+
+
 def run_turn(graph, config, user_input: str) -> None:
     """执行一轮对话:流式打印 token、工具事件,必要时处理 HITL 确认。"""
     payload = {"messages": [("user", user_input)]}
@@ -80,11 +90,13 @@ def run_turn(graph, config, user_input: str) -> None:
                         if isinstance(message, AIMessage) and message.tool_calls:
                             for call in message.tool_calls:
                                 print(
-                                    f"\n🔧 调用工具 {call['name']}({call['args']})",
+                                    "\n🔧 调用工具 "
+                                    f"{call['name']}"
+                                    f"({redact_pii(str(call['args']))})",
                                     flush=True,
                                 )
                         elif isinstance(message, ToolMessage):
-                            content = (
+                            content = redact_pii(
                                 message.content
                                 if isinstance(message.content, str)
                                 else str(message.content)
@@ -173,10 +185,12 @@ def _run_cli() -> None:
             config = {"configurable": {"thread_id": str(uuid.uuid4())}}
             print("已开启新会话,之前的对话记忆已清空。")
             continue
+        if not guard_input(text):
+            continue
         try:
             run_turn(graph, config, text)
         except Exception as exc:
-            print(f"\n调用失败:{exc}")
+            print(f"\n调用失败:{redact_pii(str(exc))}")
 
 
 if __name__ == "__main__":

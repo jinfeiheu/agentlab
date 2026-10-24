@@ -77,18 +77,21 @@ class FakeRuntime:
 
 
 class RecordingGraph:
-    """记录调用配置并返回固定回答,用于 API 测试。"""
+    """记录调用配置与 context 并返回固定回答,用于 API 测试。"""
 
     def __init__(self, answer: str = "fake answer"):
         self.answer = answer
         self.configs = []
+        self.contexts = []
 
     async def ainvoke(self, payload, config=None, **kwargs):
         self.configs.append(config)
+        self.contexts.append(kwargs.get("context"))
         return {"messages": [AIMessage(content=self.answer)]}
 
     async def astream(self, payload, config=None, stream_mode=None, **kwargs):
         self.configs.append(config)
+        self.contexts.append(kwargs.get("context"))
         yield ("messages", (AIMessageChunk(content=self.answer), {}))
         yield ("updates", {})
 
