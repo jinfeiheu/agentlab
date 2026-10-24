@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Python `>=3.10`，实际 3.12；依赖用 `uv` 管理。
-- 语料冻结：`data/docs/*.md` 8 篇，约 50–55 个 chunk；`eval/golden.jsonl` 27 条（4 条不可回答）；closed-book。
+- 语料冻结：`data/docs/*.md` 8 篇，约 50–55 个 chunk；`eval/golden.jsonl` 27 条（4 条不可回答）；closed-book。easy 集作为回归集保持不变；Task 15.5 新增 `data/docs_hard/`、`eval/golden_hard.jsonl` 和独立 `docs_hard` collection，不改动 easy 集。
 - 3 个合成用户（alice/bob/carol）；`user_id` 只从服务端 HMAC token 解析，不能由请求体指定。
 - API 的 LangGraph `thread_id` 必须为 `f"{user_id}:{session_id}"`；长期记忆命名空间为 `("user", user_id)`。
 - 可观测性使用标准 OpenTelemetry + OpenInference，导出到本地 Phoenix；应用不依赖 `arize-phoenix` 包。Phoenix 用 `uvx --from arize-phoenix phoenix serve` 单独运行。
@@ -1326,6 +1326,47 @@ Expected: PASS。
 
 ---
 
+### Task 15.5: 评测集加固与消融
+
+> 现有 27 条 easy golden 已接近饱和（task_success 1.0、citation 1.0、correctness 4.96）。本任务新增一套 hard 评测与消融，不改动 easy 集，用来暴露生成、引用、多跳和噪声语料下的真实失败模式。
+
+**Files:**
+- Create: `eval/golden_hard.jsonl`（100+ 条，含 `difficulty` / `category` / `reference_answer`）
+- Create: `data/docs_hard/*.md`（噪声、重复、过期版本、表格文本、互相冲突的内容）
+- Modify: `eval/data.py`（`GoldenItem` 增加 `difficulty`、`category`、`reference_answer`）
+- Modify: `eval/judge.py`（按参考答案的严格 rubric；可选 cross-model judge）
+- Modify: `eval/retrieval_metrics.py`（context precision/recall、citation precision）
+- Modify: `eval/run_eval.py`（`--golden`、`--corpus easy|hard`、`--closed-book`、`--judge-model`、按难度/类别分层）
+- Modify: `ingest.py`（`--docs-dir`、`--collection`，默认行为不变）
+- Modify: `.env.example`（`EVAL_JUDGE_MODEL`、hard 语料路径/collection）
+- Create: `tests/test_eval_hard.py`（新指标、judge 解析、分层汇总的单测）
+
+**Interfaces:**
+- `eval.data.GoldenItem` 增加 `difficulty: Literal["easy","medium","hard"]`、`category: str`、`reference_answer: str | None`
+- `eval.judge.judge_answer(..., reference_answer=None)`；评分 rubric 以参考答案为准；解析失败仍返回安全默认
+- `eval.retrieval_metrics.context_precision(retrieved_ids, relevant_ids, k)`、`eval.retrieval_metrics.citation_precision(citations, evidence_labels)`
+- `eval.run_eval.evaluate(..., closed_book=False, judge_model=None)`；`write_report` 按 difficulty/category 汇总
+- `ingest.build_vector_store(..., docs_dir=DOCS_DIR, collection_name=PG_COLLECTION)`（向后兼容）
+
+**Steps:**
+1. 写 100+ 条 hard golden：单跳 30、多跳 25、时间/版本 10、歧义 10、带干扰证据的不可回答 15、表格/数值 10；每条带 `reference_answer`、`difficulty`、`category`。
+2. 建 hard 语料：在 `data/docs_hard/` 放噪声、重复、过期版本、冲突内容和表格文本；用独立 collection `docs_hard` 摄入，不改动 easy `docs`。
+3. judge 加严：根据参考答案评分；支持 `--judge-model qwen3:8b`（Ollama）做 cross-model 对照；缺字段/异常仍安全默认。
+4. 新指标：token F1/Exact Match、context precision/recall、citation precision；按 difficulty/category 汇总。
+5. closed-book 消融：构建不含 `search_docs` 的图，跑同一 hard golden；对比 open-book，验证检索贡献。
+6. 跑 easy/hard × baseline/hybrid/rerank × deepseek/qwen judge 的报告；确认 hard 的生成指标不再饱和，且 closed-book 明显更差。
+7. 把新指标、失败模式和下一步写进 README/面试讲点（Task 16）。
+
+**Expected:**
+- `eval/results/hard-*.md` 生成；hard 的 task_success 明显低于 easy（例如 0.5–0.9），多跳/噪声/不可回答题出现可见失败。
+- closed-book 的 task_success 明显低于 open-book，证明检索有贡献。
+- easy 集指标不回归；离线测试全绿；集成测试显式开启。
+- 报告按 difficulty/category 分层，能定位失败模式。
+
+**面试讲点：** 评测集设计、数据泄漏/污染、judge 偏差、closed-book 消融、分层指标、样本量与置信区间。
+
+---
+
 ### Task 16: README、面试讲点与演示脚本
 
 **Files:**
@@ -1369,6 +1410,7 @@ Expected: PASS。
 - [ ] `uv run pytest -q` 全部离线测试通过。
 - [ ] `RUN_INTEGRATION=1 uv run pytest -q -m integration` 在 Postgres/Ollama/API 可用时通过。
 - [ ] `eval/results/baseline.md` 与 `eval/results/hybrid-rerank.md` 生成，指标可比较。
+- [ ] Task 15.5 的 `eval/results/hard-*.md` 生成；hard task_success 明显低于 easy；closed-book 明显低于 open-book；easy 集不回归。
 - [ ] `bash scripts/start_phoenix.sh` 后，一次问答在 Phoenix UI 可见完整 trace。
 - [ ] `uv run uvicorn api:app` + 浏览器/`curl -N` 可用；重启后同一 `session_id` 能继续。
 - [ ] 跨用户 ticket/memory 访问被拒绝，测试覆盖。
