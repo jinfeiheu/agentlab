@@ -21,6 +21,58 @@ _instrumentor: LangChainInstrumentor | None = None
 _global_provider_set = False
 
 
+def _redact_otel_value(value):
+    """递归脱敏 OTel 属性值;数字/布尔等非字符串原样保留。"""
+    if isinstance(value, str):
+        return redact_pii(value)
+    if isinstance(value, dict):
+        return {
+            key: _redact_otel_value(item) for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_redact_otel_value(item) for item in value]
+    return value
+
+
+def _redact_span(span) -> None:
+    """就地脱敏一个 ReadableSpan 的属性与事件属性。
+
+    ReadableSpan 的 _attributes 是不可变的 BoundedAttributes,所以整体
+    替换成普通 dict;span.attributes 仍会返回同样的键值。
+    """
+    attributes = getattr(span, "_attributes", None)
+    if attributes is not None:
+        span._attributes = {
+            key: _redact_otel_value(value)
+            for key, value in attributes.items()
+        }
+    for event in getattr(span, "_events", ()) or ():
+        event_attributes = getattr(event, "_attributes", None)
+        if event_attributes is not None:
+            event._attributes = {
+                key: _redact_otel_value(value)
+                for key, value in event_attributes.items()
+            }
+
+
+class RedactingSpanExporter(SpanExporter):
+    """在导出前统一脱敏;覆盖 OpenInference 自动产生的输入/输出属性。"""
+
+    def __init__(self, delegate: SpanExporter):
+        self._delegate = delegate
+
+    def export(self, spans):
+        for span in spans:
+            _redact_span(span)
+        return self._delegate.export(spans)
+
+    def shutdown(self) -> None:
+        self._delegate.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30_000) -> bool:
+        return self._delegate.force_flush(timeout_millis)
+
+
 def setup_tracing(exporter: SpanExporter | None = None) -> TracerProvider:
     """初始化 TracerProvider;测试可传入内存 exporter,否则按配置导出到 Phoenix。"""
     global _provider, _instrumentor, _global_provider_set
@@ -28,14 +80,20 @@ def setup_tracing(exporter: SpanExporter | None = None) -> TracerProvider:
 
     provider = TracerProvider()
     if exporter is not None:
-        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        provider.add_span_processor(
+            SimpleSpanProcessor(RedactingSpanExporter(exporter))
+        )
     elif TRACING_ENABLED:
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
             OTLPSpanExporter,
         )
 
         provider.add_span_processor(
-            BatchSpanProcessor(OTLPSpanExporter(endpoint=PHOENIX_ENDPOINT))
+            BatchSpanProcessor(
+                RedactingSpanExporter(
+                    OTLPSpanExporter(endpoint=PHOENIX_ENDPOINT)
+                )
+            )
         )
 
     # 全局 provider 只能设置一次;重复 setup 时手动 span 仍使用最新的 provider。

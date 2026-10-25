@@ -62,6 +62,90 @@ def test_chat_stream_emits_token_and_done():
     assert '"type": "done"' in body
 
 
+class PiiAnswerGraph:
+    async def ainvoke(self, *args, **kwargs):
+        return {
+            "messages": [
+                AIMessage(
+                    content="联系 alice@example.com 或 13800138000"
+                )
+            ]
+        }
+
+    async def aget_state(self, config):
+        return SimpleNamespace(values={"messages": []}, interrupts=())
+
+
+def test_chat_redacts_answer_pii():
+    client, token = auth_client(fake_services(graph=PiiAnswerGraph()))
+    response = client.post(
+        "/chat",
+        headers=bearer(token),
+        json={"message": "hi", "session_id": "s1"},
+    )
+    answer = response.json()["answer"]
+    assert "alice@example.com" not in answer
+    assert "13800138000" not in answer
+    assert "[EMAIL]" in answer and "[PHONE]" in answer
+
+
+class PiiStreamGraph:
+    async def astream(self, *args, **kwargs):
+        for chunk in ["联系 ali", "ce@exam", "ple.com 或 138", "00138000。"]:
+            yield ("messages", (AIMessageChunk(content=chunk), {}))
+        yield ("updates", {})
+
+    async def aget_state(self, config):
+        return SimpleNamespace(values={"messages": []}, interrupts=())
+
+
+def test_chat_stream_redacts_pii_split_across_chunks():
+    client, token = auth_client(fake_services(graph=PiiStreamGraph()))
+    with client.stream(
+        "POST",
+        "/chat/stream",
+        headers=bearer(token),
+        json={"message": "hi", "session_id": "s1"},
+    ) as response:
+        body = "".join(response.iter_text())
+    assert "alice@example.com" not in body
+    assert "13800138000" not in body
+    assert "[EMAIL]" in body and "[PHONE]" in body
+    assert '"type": "done"' in body
+
+
+class PiiInterruptGraph:
+    async def ainvoke(self, *args, **kwargs):
+        return {"messages": [AIMessage(content="请确认")]}
+
+    async def aget_state(self, config):
+        return SimpleNamespace(
+            values={"messages": []},
+            interrupts=(
+                SimpleNamespace(
+                    value={
+                        "question": "确认发给 alice@example.com?",
+                        "content": "电话 13800138000",
+                    }
+                ),
+            ),
+        )
+
+
+def test_chat_redacts_interrupt_content():
+    client, token = auth_client(fake_services(graph=PiiInterruptGraph()))
+    response = client.post(
+        "/chat",
+        headers=bearer(token),
+        json={"message": "hi", "session_id": "s1"},
+    )
+    interrupt = response.json()["interrupt"]
+    assert "alice@example.com" not in interrupt["question"]
+    assert "13800138000" not in interrupt["content"]
+    assert "[EMAIL]" in interrupt["question"]
+    assert "[PHONE]" in interrupt["content"]
+
+
 def test_thread_id_is_scoped_to_user():
     fake = RecordingGraph()
     client, token_a = auth_client(fake_services(graph=fake))
@@ -71,6 +155,42 @@ def test_thread_id_is_scoped_to_user():
         json={"message": "hi", "session_id": "same"},
     )
     assert fake.configs[0]["configurable"]["thread_id"] == "user_alice:same"
+
+
+def test_thread_id_is_scoped_for_two_users_same_session():
+    fake = RecordingGraph()
+    client = TestClient(create_app(services=fake_services(graph=fake)))
+    for token in (sign_token("user_alice"), sign_token("user_bob")):
+        response = client.post(
+            "/chat",
+            headers=bearer(token),
+            json={"message": "hi", "session_id": "same"},
+        )
+        assert response.status_code == 200
+    assert fake.configs[0]["configurable"]["thread_id"] == (
+        "user_alice:same"
+    )
+    assert fake.configs[1]["configurable"]["thread_id"] == (
+        "user_bob:same"
+    )
+
+
+def test_request_body_user_id_is_ignored():
+    fake = RecordingGraph()
+    client, token = auth_client(fake_services(graph=fake))
+    response = client.post(
+        "/chat",
+        headers=bearer(token),
+        json={
+            "message": "hi",
+            "session_id": "s1",
+            "user_id": "user_bob",
+        },
+    )
+    assert response.status_code == 200
+    assert fake.configs[0]["configurable"]["thread_id"] == (
+        "user_alice:s1"
+    )
 
 
 def test_invalid_token_rejected():
@@ -95,6 +215,20 @@ def test_rate_limit_returns_429(monkeypatch):
         client.post("/chat", headers=bearer(token), json=payload).status_code
         == 429
     )
+
+
+def test_needs_db_check_covers_hybrid_and_mcp(monkeypatch):
+    monkeypatch.setattr(api, "USE_DB", False)
+    monkeypatch.setattr(api, "RAG_MODE", "baseline")
+    monkeypatch.setattr(api, "USE_MCP", False)
+    assert api._needs_db_check() is False
+    monkeypatch.setattr(api, "RAG_MODE", "hybrid")
+    assert api._needs_db_check() is True
+    monkeypatch.setattr(api, "RAG_MODE", "baseline")
+    monkeypatch.setattr(api, "USE_MCP", True)
+    assert api._needs_db_check() is True
+    monkeypatch.setattr(api, "USE_DB", True)
+    assert api._needs_db_check() is True
 
 
 def test_healthz():
@@ -445,6 +579,107 @@ def test_chat_timeout(monkeypatch):
         "/chat",
         headers=bearer(token),
         json={"message": "hi", "session_id": "s1"},
+    )
+    assert response.status_code == 504
+
+
+class BrokenStateGraph:
+    class Checkpointer:
+        async def adelete_thread(self, thread_id):
+            raise RuntimeError("db down")
+
+    checkpointer = Checkpointer()
+
+    async def aget_state(self, config):
+        raise RuntimeError("db down")
+
+    async def astream(self, *args, **kwargs):
+        yield ("updates", {})
+
+
+def test_chat_stream_state_failure_emits_error():
+    client, token = auth_client(
+        fake_services(graph=BrokenStateGraph())
+    )
+    with client.stream(
+        "POST",
+        "/chat/stream",
+        headers=bearer(token),
+        json={"message": "hi", "session_id": "s1"},
+    ) as response:
+        body = "".join(response.iter_text())
+    assert '"type": "error"' in body
+    assert "db down" in body
+
+
+class SlowStreamGraph:
+    async def aget_state(self, config):
+        return SimpleNamespace(values={"messages": []}, interrupts=())
+
+    async def astream(self, *args, **kwargs):
+        await asyncio.sleep(1)
+        yield ("messages", (AIMessageChunk(content="late"), {}))
+
+
+def test_chat_stream_timeout_emits_error(monkeypatch):
+    monkeypatch.setattr(api, "REQUEST_TIMEOUT", 0.05)
+    client, token = auth_client(fake_services(graph=SlowStreamGraph()))
+    with client.stream(
+        "POST",
+        "/chat/stream",
+        headers=bearer(token),
+        json={"message": "hi", "session_id": "s1"},
+    ) as response:
+        body = "".join(response.iter_text())
+    assert '"type": "error"' in body
+    assert "timeout" in body
+
+
+class DisconnectingRequest:
+    async def is_disconnected(self):
+        return True
+
+
+class ChunkGraph:
+    async def aget_state(self, config):
+        return SimpleNamespace(values={"messages": []}, interrupts=())
+
+    async def astream(self, *args, **kwargs):
+        yield ("messages", (AIMessageChunk(content="x"), {}))
+        yield ("updates", {})
+
+
+async def test_chat_events_stops_when_client_disconnects():
+    events = [
+        event
+        async for event in api._chat_events(
+            ChunkGraph(),
+            {"messages": []},
+            {"configurable": {"thread_id": "user_alice:s1"}},
+            DisconnectingRequest(),
+            1,
+            asyncio.Lock(),
+        )
+    ]
+    assert events == []
+
+
+class SlowStateGraph:
+    async def aget_state(self, config):
+        await asyncio.sleep(1)
+        return SimpleNamespace(values={"messages": []}, interrupts=())
+
+    async def ainvoke(self, *args, **kwargs):
+        return {"messages": [AIMessage(content="ok")]}
+
+
+def test_chat_resume_state_timeout(monkeypatch):
+    monkeypatch.setattr(api, "REQUEST_TIMEOUT", 0.01)
+    client, token = auth_client(fake_services(graph=SlowStateGraph()))
+    response = client.post(
+        "/chat/resume",
+        headers=bearer(token),
+        json={"session_id": "s1", "answer": "y"},
     )
     assert response.status_code == 504
 

@@ -38,7 +38,7 @@ from models import build_chat_model, build_embeddings
 from multi_agent import build_multi_agent_graph
 from rag import build_inmemory_retriever
 from retrieval import build_pgvector_hybrid_retriever, build_reranker
-from security import check_input, redact_pii
+from security import StreamingRedactor, check_input, redact_pii
 from tickets import get_ticket
 from tools import calculator, make_search_tool, send_report
 from tracing import setup_tracing, shutdown_tracing
@@ -127,6 +127,7 @@ def run_turn(
     stream_modes = ["updates"] if multi else ["messages", "updates"]
     while True:
         print("助手 > ", end="", flush=True)
+        redactor = StreamingRedactor()
         for mode, data in graph.stream(
             payload,
             config=config,
@@ -140,7 +141,9 @@ def run_turn(
                     and isinstance(chunk.content, str)
                     and chunk.content
                 ):
-                    print(chunk.content, end="", flush=True)
+                    safe = redactor.feed(chunk.content)
+                    if safe:
+                        print(safe, end="", flush=True)
             elif mode == "updates":
                 if multi:
                     for node_name, update in (data or {}).items():
@@ -157,13 +160,14 @@ def run_turn(
                             print("\n🔎 researcher 完成", flush=True)
                         elif node_name == "writer":
                             print(
-                                f"\n✍️ writer 草稿:\n{update.get('draft', '')}",
+                                "\n✍️ writer 草稿:\n"
+                                f"{redact_pii(str(update.get('draft', '')))}",
                                 flush=True,
                             )
                         elif node_name == "critic":
                             print(
                                 f"\n🧐 critic: "
-                                f"{str(update.get('review', ''))[:120]}",
+                                f"{redact_pii(str(update.get('review', '')))[:120]}",
                                 flush=True,
                             )
                     continue
@@ -192,6 +196,9 @@ def run_turn(
                                 f"\n📄 工具结果 [{message.name}]: {preview}",
                                 flush=True,
                             )
+        tail = redactor.flush()
+        if tail:
+            print(tail, end="", flush=True)
         print()
 
         state = graph.get_state(config)
@@ -200,11 +207,12 @@ def run_turn(
 
         value = state.interrupts[0].value
         if isinstance(value, dict):
-            print(f"⚠️  {value.get('question', value)}")
+            question = redact_pii(str(value.get("question", value)))
+            print(f"⚠️  {question}")
             if "content" in value:
-                print(f"   内容:{value['content']}")
+                print(f"   内容:{redact_pii(str(value['content']))}")
         else:
-            print(f"⚠️  {value}")
+            print(f"⚠️  {redact_pii(str(value))}")
         answer = input("确认? (y/n) > ").strip()
         payload = Command(resume=answer)
 

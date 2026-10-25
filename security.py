@@ -94,6 +94,49 @@ def redact_pii(text: str) -> str:
     return _PHONE_RE.sub("[PHONE]", redacted)
 
 
+# 只用空白和中文句读做切分;ASCII 的 . 和 , 可能出现在邮箱/数字里。
+_STREAM_SEPARATORS = " \n\t\r。！？；，、"
+
+
+class StreamingRedactor:
+    """流式脱敏:先保留一段尾部,只在完整分隔符处吐出已脱敏文本。
+
+    PII 最长约 19 位;holdback 留足余量后,跨 chunk 的模式也会在
+    缓冲区里完整出现后再替换,不会把前半段先发给客户端。
+    """
+
+    def __init__(self, holdback: int = 64):
+        self.holdback = max(1, int(holdback))
+        self._buffer = ""
+
+    def feed(self, text: str) -> str:
+        """喂入一个 token/chunk,返回可以安全发送的已脱敏前缀。"""
+        if not text:
+            return ""
+        self._buffer += text
+        if len(self._buffer) <= self.holdback:
+            return ""
+        cut_limit = len(self._buffer) - self.holdback
+        cut = max(
+            (
+                self._buffer.rfind(separator, 0, cut_limit + 1)
+                for separator in _STREAM_SEPARATORS
+            ),
+            default=-1,
+        )
+        if cut < 0:
+            return ""
+        prefix = self._buffer[: cut + 1]
+        self._buffer = self._buffer[cut + 1 :]
+        return redact_pii(prefix)
+
+    def flush(self) -> str:
+        """流结束时吐出剩余文本;即使没有分隔符也会脱敏。"""
+        tail = redact_pii(self._buffer)
+        self._buffer = ""
+        return tail
+
+
 def check_tool(name: str, args: dict) -> None:
     """只放行 allowlist 中的工具;未知工具或非法参数抛 ToolDenied。"""
     if name not in ALLOWED_TOOLS:

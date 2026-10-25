@@ -65,6 +65,7 @@ _DIFFICULTY_ORDER = ("easy", "medium", "hard")
 _STRATUM_METRICS = (
     "count",
     "task_success",
+    "answerable_success",
     "avg_correctness",
     "avg_faithfulness",
     "citation_support_rate",
@@ -161,6 +162,13 @@ def _group_metrics(rows: list[dict], model_name: str) -> dict[str, float]:
     return {
         "count": len(rows),
         "task_success": _mean([row["task_success"] for row in rows]),
+        "answerable_success": _mean_or_none(
+            [
+                row["answerable_success"]
+                for row in answerable
+                if row["answerable_success"] is not None
+            ]
+        ),
         "tool_accuracy": _mean_or_none(
             [row["tool_accuracy"] for row in answerable]
         ),
@@ -307,13 +315,26 @@ def evaluate(
             item.reference_answer,
         )
         refused = (not item.answerable) and _is_refusal(answer)
+        answerable_success = (
+            judged.correctness >= 4 if item.answerable else None
+        )
         if item.answerable:
-            task_success = judged.correctness >= 4 and judged.citation_support
+            if closed_book:
+                # 闭卷没有可引用的工具证据,citation_support 不适用。
+                task_success = answerable_success
+            else:
+                task_success = (
+                    answerable_success and judged.citation_support
+                )
         else:
-            task_success = refused
+            # 拒答还不够:如果拒答后继续编造,faithfulness 会变低。
+            task_success = refused and judged.faithfulness >= 4
         if error:
             task_success = False
-        tool_accuracy = set(actual_tools) == set(item.expected_tools)
+            answerable_success = False if item.answerable else None
+        # 允许安全的额外工具(例如算术题同时查资料和用计算器);
+        # 只有缺失必需工具才算工具选择失败。
+        tool_accuracy = set(item.expected_tools).issubset(set(actual_tools))
 
         rows.append(
             {
@@ -337,6 +358,7 @@ def evaluate(
                 "citation_support": judged.citation_support,
                 "reason": judged.reason,
                 "task_success": task_success,
+                "answerable_success": answerable_success,
                 "tool_accuracy": tool_accuracy,
                 "refused": refused,
                 "token_f1": (

@@ -101,6 +101,30 @@ def test_search_tool_limits_top_n():
     assert "内容2" not in out
 
 
+def test_search_tool_emits_retrieve_and_rerank_spans():
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+
+    from tracing import setup_tracing
+
+    exporter = InMemorySpanExporter()
+    setup_tracing(exporter=exporter)
+    docs = [
+        Document(page_content="a", metadata={"source": "a.md", "section": "S"})
+    ]
+
+    class FakeReranker:
+        def rerank(self, query, items):
+            return list(items)
+
+    tool = make_search_tool(FakeRetriever(docs), reranker=FakeReranker())
+    tool.invoke({"query": "q"})
+    names = {span.name for span in exporter.get_finished_spans()}
+    assert "retrieve" in names
+    assert "rerank" in names
+
+
 def test_search_tool_applies_reranker():
     docs = [
         Document(page_content="a", metadata={"source": "a.md", "section": "S"}),

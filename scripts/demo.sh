@@ -56,7 +56,7 @@ step "2/9 安装依赖" \
 uv sync --all-groups
 
 step "3/9 离线测试" \
-  "uv run pytest -q：不依赖 DeepSeek / Ollama / Postgres 的 239 个测试。"
+  "uv run pytest -q：不依赖 DeepSeek / Ollama / Postgres 的 259 个测试。"
 uv run pytest -q
 
 step "4/9 启动 Postgres" \

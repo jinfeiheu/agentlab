@@ -46,7 +46,7 @@ from memory import (
 from models import build_chat_model, build_embeddings
 from rag import build_inmemory_retriever
 from retrieval import build_pgvector_hybrid_retriever, build_reranker
-from security import check_input, redact_pii
+from security import StreamingRedactor, check_input, redact_pii
 from tickets import get_ticket
 from tools import calculator, make_search_tool, send_report
 from tracing import setup_tracing, shutdown_tracing
@@ -136,6 +136,11 @@ class RateLimiter:
         return True
 
 
+def _needs_db_check() -> bool:
+    """checkpointer/Store、混合检索或 MCP 知识库都依赖 Postgres。"""
+    return USE_DB or RAG_MODE == "hybrid" or USE_MCP
+
+
 async def _check_db() -> None:
     """执行 SELECT 1,供健康检查使用。"""
     from psycopg import AsyncConnection
@@ -200,6 +205,7 @@ async def build_services() -> Services:
             retriever=retriever,
             model=model,
             memory_store=store,
+            db_check=_check_db if _needs_db_check() else None,
         )
 
     from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
@@ -208,15 +214,18 @@ async def build_services() -> Services:
         AsyncPostgresStore,
         PostgresIndexConfig,
     )
+    from psycopg.conninfo import make_conninfo
 
+    # 启动时不要无限等待:连不上 Postgres 应在健康检查/启动错误里快速暴露。
+    async_database_url = make_conninfo(DATABASE_URL, connect_timeout=3)
     stack = AsyncExitStack()
     try:
         saver = await stack.enter_async_context(
-            AsyncPostgresSaver.from_conn_string(DATABASE_URL)
+            AsyncPostgresSaver.from_conn_string(async_database_url)
         )
         store = await stack.enter_async_context(
             AsyncPostgresStore.from_conn_string(
-                DATABASE_URL,
+                async_database_url,
                 index=PostgresIndexConfig(
                     dims=EMBED_DIMS, embed=embeddings
                 ),
@@ -293,7 +302,7 @@ def _extract_answer(result) -> str:
             continue
         text = _message_text(message)
         if text.strip():
-            return text
+            return redact_pii(text)
     return ""
 
 
@@ -316,7 +325,7 @@ def _extract_sources(result) -> list[str]:
     """从 ToolMessage 和回答中收集来源。"""
     messages = result.get("messages", []) if isinstance(result, dict) else []
     return _dedupe(
-        source
+        redact_pii(source)
         for message in messages
         for source in _sources_from_text(_message_text(message))
     )
@@ -330,10 +339,10 @@ def _interrupt_payload(state) -> dict | None:
     value = getattr(interrupts[0], "value", None)
     if isinstance(value, dict):
         return {
-            "question": str(value.get("question", "")),
-            "content": str(value.get("content", "")),
+            "question": redact_pii(str(value.get("question", ""))),
+            "content": redact_pii(str(value.get("content", ""))),
         }
-    return {"question": str(value or ""), "content": ""}
+    return {"question": redact_pii(str(value or "")), "content": ""}
 
 
 async def _has_interrupt(graph, config) -> bool:
@@ -553,16 +562,38 @@ async def _chat_events(
     """把 graph 流转换成 SSE 事件;负责串行、修复、超时、断连和异常上报。"""
     sources: list[str] = []
     answer_parts: list[str] = []
-    async with lock:
-        if skip_prepare:
-            if not await _has_interrupt(graph, config):
-                yield sse(
-                    {"type": "error", "message": "no pending interrupt"}
-                )
-                return
-        else:
-            await _prepare_thread(graph, config)
-        try:
+    redactor = StreamingRedactor()
+    try:
+        async with lock:
+            deadline = time.monotonic() + timeout
+            if skip_prepare:
+                remaining = max(0.01, deadline - time.monotonic())
+                try:
+                    has_interrupt = await asyncio.wait_for(
+                        _has_interrupt(graph, config), timeout=remaining
+                    )
+                except asyncio.TimeoutError:
+                    yield sse(
+                        {"type": "error", "message": "request timeout"}
+                    )
+                    return
+                if not has_interrupt:
+                    yield sse(
+                        {"type": "error", "message": "no pending interrupt"}
+                    )
+                    return
+            else:
+                remaining = max(0.01, deadline - time.monotonic())
+                try:
+                    await asyncio.wait_for(
+                        _prepare_thread(graph, config), timeout=remaining
+                    )
+                except asyncio.TimeoutError:
+                    yield sse(
+                        {"type": "error", "message": "request timeout"}
+                    )
+                    return
+
             async with aclosing(
                 graph.astream(
                     payload,
@@ -572,13 +603,14 @@ async def _chat_events(
                 )
             ) as stream:
                 iterator = stream.__aiter__()
-                deadline = time.monotonic() + timeout
                 while True:
                     if await request.is_disconnected():
                         return
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
-                        yield sse({"type": "error", "message": "request timeout"})
+                        yield sse(
+                            {"type": "error", "message": "request timeout"}
+                        )
                         return
                     try:
                         mode, data = await asyncio.wait_for(
@@ -587,7 +619,9 @@ async def _chat_events(
                     except StopAsyncIteration:
                         break
                     except asyncio.TimeoutError:
-                        yield sse({"type": "error", "message": "request timeout"})
+                        yield sse(
+                            {"type": "error", "message": "request timeout"}
+                        )
                         return
                     if mode == "messages":
                         chunk, _metadata = data
@@ -596,7 +630,9 @@ async def _chat_events(
                         text = _message_text(chunk)
                         if text:
                             answer_parts.append(text)
-                            yield sse({"type": "token", "text": text})
+                            safe = redactor.feed(text)
+                            if safe:
+                                yield sse({"type": "token", "text": safe})
                     elif mode == "updates":
                         for update in (data or {}).values():
                             if not isinstance(update, dict):
@@ -610,25 +646,56 @@ async def _chat_events(
                                     )
                                 for event in _tool_events(message):
                                     yield sse(event)
-            interrupt = await _get_interrupt(graph, config)
+            tail = redactor.flush()
+            if tail:
+                yield sse({"type": "token", "text": tail})
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                yield sse({"type": "error", "message": "request timeout"})
+                return
+            try:
+                interrupt = await asyncio.wait_for(
+                    _get_interrupt(graph, config), timeout=remaining
+                )
+            except asyncio.TimeoutError:
+                yield sse({"type": "error", "message": "request timeout"})
+                return
             if interrupt:
                 yield sse({"type": "interrupt", **interrupt})
             elif services is not None and user_text:
-                await _post_turn_memory(
-                    graph, config, services, context, user_text
-                )
+                remaining = deadline - time.monotonic()
+                if remaining > 0:
+                    try:
+                        await asyncio.wait_for(
+                            _post_turn_memory(
+                                graph,
+                                config,
+                                services,
+                                context,
+                                user_text,
+                            ),
+                            timeout=remaining,
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning(
+                            "流式轮次结束后记忆抽取超时,已跳过"
+                        )
             yield sse(
                 {
                     "type": "done",
                     "sources": _dedupe(
-                        sources + _sources_from_text("".join(answer_parts))
+                        redact_pii(source)
+                        for source in (
+                            sources
+                            + _sources_from_text("".join(answer_parts))
+                        )
                     ),
                 }
             )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:  # noqa: BLE001 - 流内错误以事件返回,不中断连接
-            yield sse({"type": "error", "message": redact_pii(str(exc))})
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - 生成器内错误统一发 error 事件
+        yield sse({"type": "error", "message": redact_pii(str(exc))})
 
 
 def get_current_user(
@@ -748,7 +815,15 @@ def create_app(services: Services | None = None) -> FastAPI:
         thread_id = f"{user.user_id}:{body.session_id}"
         config = {"configurable": {"thread_id": thread_id}}
         async with get_thread_lock(app, thread_id):
-            await _prepare_thread(svc.graph, config)
+            try:
+                await asyncio.wait_for(
+                    _prepare_thread(svc.graph, config),
+                    timeout=REQUEST_TIMEOUT,
+                )
+            except asyncio.TimeoutError as exc:
+                raise HTTPException(
+                    status_code=504, detail="request timeout"
+                ) from exc
             try:
                 result = await asyncio.wait_for(
                     svc.graph.ainvoke(
@@ -768,9 +843,15 @@ def create_app(services: Services | None = None) -> FastAPI:
                 ) from exc
             interrupt = await _get_interrupt(svc.graph, config)
         if interrupt is None:
-            await _maybe_extract_memory(
-                svc, user, body.message, result.get("messages", [])
-            )
+            try:
+                await asyncio.wait_for(
+                    _maybe_extract_memory(
+                        svc, user, body.message, result.get("messages", [])
+                    ),
+                    timeout=min(REQUEST_TIMEOUT, 10),
+                )
+            except asyncio.TimeoutError:
+                logger.warning("非流式轮次结束后记忆抽取超时,已跳过")
         return ChatResponse(
             answer=_extract_answer(result),
             sources=_extract_sources(result),
@@ -794,7 +875,14 @@ def create_app(services: Services | None = None) -> FastAPI:
                 raise HTTPException(
                     status_code=409, detail="no pending interrupt"
                 )
-            state = await aget_state(config)
+            try:
+                state = await asyncio.wait_for(
+                    aget_state(config), timeout=REQUEST_TIMEOUT
+                )
+            except asyncio.TimeoutError as exc:
+                raise HTTPException(
+                    status_code=504, detail="request timeout"
+                ) from exc
             if not getattr(state, "interrupts", ()):
                 raise HTTPException(
                     status_code=409, detail="no pending interrupt"
@@ -835,7 +923,15 @@ def create_app(services: Services | None = None) -> FastAPI:
             raise HTTPException(status_code=429, detail="rate limit exceeded")
         thread_id = f"{user.user_id}:{body.session_id}"
         config = {"configurable": {"thread_id": thread_id}}
-        if not await _has_interrupt(svc.graph, config):
+        try:
+            has_interrupt = await asyncio.wait_for(
+                _has_interrupt(svc.graph, config), timeout=REQUEST_TIMEOUT
+            )
+        except asyncio.TimeoutError as exc:
+            raise HTTPException(
+                status_code=504, detail="request timeout"
+            ) from exc
+        if not has_interrupt:
             raise HTTPException(status_code=409, detail="no pending interrupt")
         return StreamingResponse(
             _chat_events(

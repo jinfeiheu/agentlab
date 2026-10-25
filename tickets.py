@@ -21,7 +21,7 @@ def fetch_ticket(ticket_id: str) -> dict | None:
     from psycopg import connect
     from psycopg.rows import dict_row
 
-    with connect(DATABASE_URL) as conn:
+    with connect(DATABASE_URL, connect_timeout=3) as conn:
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 "SELECT ticket_id, user_id, subject, status "

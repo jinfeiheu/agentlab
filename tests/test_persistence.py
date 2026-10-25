@@ -83,6 +83,35 @@ async def test_async_store_persists_items():
     assert item.value == {"text": "你好"}
 
 
+async def test_postgres_store_isolates_users():
+    """AsyncPostgresStore 的前缀搜索不能跨 user 命名空间。"""
+    from langgraph.store.postgres.aio import PostgresIndexConfig
+
+    from tests.fakes import FakeEmbeddings
+
+    suffix = uuid.uuid4().hex
+    alice = f"user_alice_{suffix}"
+    bob = f"user_bob_{suffix}"
+    index = PostgresIndexConfig(
+        dims=config.EMBED_DIMS,
+        embed=FakeEmbeddings(config.EMBED_DIMS),
+    )
+    async with AsyncPostgresStore.from_conn_string(
+        TEST_DB, index=index
+    ) as store:
+        await store.setup()
+        await store.aput(("user", alice, "profile"), "name", {"value": "小明"})
+        alice_items = await store.asearch(
+            ("user", alice), query="名字", limit=5
+        )
+        bob_items = await store.asearch(
+            ("user", bob), query="名字", limit=5
+        )
+        assert any(item.value.get("value") == "小明" for item in alice_items)
+        assert bob_items == []
+        await store.adelete(("user", alice, "profile"), "name")
+
+
 async def test_build_services_persists_across_instances(monkeypatch):
     """USE_DB=true 时服务使用 Postgres;新实例仍能读到旧会话。"""
     import api

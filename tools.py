@@ -7,6 +7,7 @@ from langchain_core.tools import BaseTool, tool
 from langgraph.types import interrupt
 
 from rag import format_docs
+from tracing import span
 
 _OPS = {
     ast.Add: operator.add,
@@ -80,9 +81,20 @@ def make_search_tool(retriever, reranker=None, top_n: int = 3) -> BaseTool:
     @tool
     def search_docs(query: str) -> str:
         """从本地知识库检索 LangChain/LangGraph 相关资料。"""
-        docs = retriever.invoke(query)
+        with span(
+            "retrieve",
+            query=query,
+            retriever=type(retriever).__name__,
+        ):
+            docs = retriever.invoke(query)
         if reranker is not None:
-            docs = reranker.rerank(query, docs)
+            with span(
+                "rerank",
+                query=query,
+                candidates=len(docs),
+                reranker=type(reranker).__name__,
+            ):
+                docs = reranker.rerank(query, docs)
         docs = list(docs)[:top_n]
         if not docs:
             return "知识库中没有找到相关内容。"

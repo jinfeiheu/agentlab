@@ -44,7 +44,8 @@ def test_hard_golden_items_are_fully_annotated():
         assert item.difficulty in {"easy", "medium", "hard"}
         assert item.reference_answer
         assert item.key_points
-        assert item.expected_tools == ["search_docs"]
+        assert "search_docs" in item.expected_tools
+        assert set(item.expected_tools) <= {"search_docs", "calculator"}
         if item.answerable:
             assert item.expected_sources
             assert item.relevant_chunk_ids
@@ -230,6 +231,47 @@ def _golden():
     ]
 
 
+class _GraphExtraTool(_Graph):
+    def invoke(self, payload, config=None, **kwargs):
+        result = super().invoke(payload, config=config, **kwargs)
+        result["messages"].insert(
+            1,
+            ToolMessage(
+                content="60",
+                name="calculator",
+                tool_call_id="c0",
+            ),
+        )
+        return result
+
+
+class _GraphNoTools:
+    def invoke(self, payload, config=None, **kwargs):
+        return {"messages": [AIMessage(content="没有调用工具")]}
+
+
+def test_tool_accuracy_allows_extra_safe_tool():
+    report = evaluate(
+        _GraphExtraTool(),
+        FakeRetriever([]),
+        _golden()[:1],
+        FakeRunnable(_judge_result()),
+    )
+    assert report.rows[0]["expected_tools"] == ["search_docs"]
+    assert "calculator" in report.rows[0]["actual_tools"]
+    assert report.rows[0]["tool_accuracy"] is True
+
+
+def test_tool_accuracy_requires_expected_tool():
+    report = evaluate(
+        _GraphNoTools(),
+        FakeRetriever([]),
+        _golden()[:1],
+        FakeRunnable(_judge_result()),
+    )
+    assert report.rows[0]["tool_accuracy"] is False
+
+
 def test_evaluate_reports_strata_by_difficulty_and_category():
     report = evaluate(
         _Graph(),
@@ -279,6 +321,63 @@ def test_stratum_without_applicable_rows_reports_none():
     assert unanswerable["refusal_rate"] == 0.0
     easy = report.strata["category"]["single-hop"]
     assert easy["tool_accuracy"] == 1.0
+
+
+class _RefusalGraph:
+    def invoke(self, payload, config=None, **kwargs):
+        return {
+            "messages": [
+                AIMessage(content="根据现有资料无法回答。")
+            ]
+        }
+
+
+def test_unanswerable_refusal_must_also_be_faithful():
+    from eval.judge import JudgeResult
+
+    judge = FakeRunnable(
+        JudgeResult(
+            correctness=0,
+            faithfulness=2,
+            citation_support=False,
+            reason="refused but added unsupported advice",
+        )
+    )
+    report = evaluate(
+        _RefusalGraph(),
+        FakeRetriever([]),
+        _golden()[1:],
+        judge,
+    )
+    row = report.rows[0]
+    assert row["refused"] is True
+    assert row["task_success"] is False
+    assert report.generation["refusal_rate"] == 1.0
+
+
+def test_closed_book_uses_correctness_without_citation():
+    from eval.judge import JudgeResult
+
+    judge = FakeRunnable(
+        JudgeResult(
+            correctness=4,
+            faithfulness=4,
+            citation_support=False,
+            reason="closed-book answer correct but uncited",
+        )
+    )
+    report = evaluate(
+        _Graph(),
+        _ExplodingRetriever(),
+        _golden()[:1],
+        judge,
+        closed_book=True,
+    )
+    row = report.rows[0]
+    assert row["citation_support"] is False
+    assert row["task_success"] is True
+    assert row["answerable_success"] is True
+    assert report.generation["answerable_success"] == 1.0
 
 
 def test_closed_book_skips_retrieval_and_marks_report():

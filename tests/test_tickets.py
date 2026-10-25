@@ -68,6 +68,44 @@ def test_get_ticket_handles_db_error(monkeypatch):
     assert "查询失败" in result
 
 
+def test_fetch_ticket_uses_connect_timeout(monkeypatch):
+    import psycopg
+
+    captured = {}
+
+    class FakeCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, *args):
+            return None
+
+        def fetchone(self):
+            return None
+
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def cursor(self, **kwargs):
+            return FakeCursor()
+
+    def fake_connect(dsn, **kwargs):
+        captured["dsn"] = dsn
+        captured.update(kwargs)
+        return FakeConnection()
+
+    monkeypatch.setattr(psycopg, "connect", fake_connect)
+    assert tickets.fetch_ticket("T-1") is None
+    assert captured["connect_timeout"] == 3
+
+
 @integration
 @pytest.mark.integration
 def test_fetch_ticket_reads_seeded_row():

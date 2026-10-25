@@ -7,7 +7,7 @@
 - 这是一个中文 RAG / Agent 项目，不是单轮 demo：有 CLI、FastAPI/SSE、pgvector、混合检索、重排、评测、Phoenix trace、MCP、安全、长期记忆和多 Agent。
 - 四阶段：先把评测和可观测做出来，再服务化，再升级检索，最后加 MCP/安全/记忆/多 Agent。
 - 两个数据集：easy 27 条冻结回归，hard 100 条覆盖单跳、多跳、时间/版本、歧义、不可回答和表格。
-- 核心结果：easy 接近饱和(task_success 0.96–1.0)；hard 0.84–0.92；closed-book 只有 0.11，说明检索有实际贡献。
+- 核心结果：easy 接近饱和(task_success 0.96–1.0)；hard 0.83–0.89；closed-book 的 answerable_success 只有 3.5%(open-book 81.2%)，说明检索有实际贡献。
 - 我关注的不只是“分数”，还有失败模式：歧义题 0.30、多跳 0.76、表格 0.80，以及不同裁判模型的偏差。
 
 ## 1. 为什么用 LangGraph
@@ -23,10 +23,12 @@
 
 - 问题：没有 golden set，“回答变好”只能靠感觉；没有分层，平均值会掩盖失败类别。
 - easy 27 条(4 条不可回答)冻结做回归；hard 100 条只追加，六类各 10–30 条，带 `reference_answer`。
-- 指标：Recall@3/MRR/nDCG@3 看检索；correctness/faithfulness/citation_support 看生成；task_success=correctness≥4 且 citation_support。
-- 分母要分开：tool_accuracy/citation_support 只算可回答题，refusal_rate 只算不可回答题。
+- hard 语料是合成的 AgentLab 文档世界：HNSW 参数、90 天保留期、历史成本等是刻意放置的版本冲突/噪声，不是本仓库真实配置；hard 指标衡量文档世界里的检索与推理，不是代码审计。
+- 指标：Recall@3/MRR/nDCG@3 看检索；correctness/faithfulness/citation_support 看生成；`answerable_success=correctness≥4`，开卷 task_success 还要求 citation_support，闭卷只看 correctness。
+- 不可回答题不能只看“有没有说无法回答”：还要 faithfulness≥4，拒答后继续编造同样算失败。
+- 分母要分开：answerable_success/tool_accuracy/citation_support 只算可回答题，refusal_rate 只算不可回答题；tool_accuracy 用“必需工具子集”，额外安全工具不扣分。
 - judge 只使用 agent 实际检索到的 ToolMessage，不把预取 top-k 算进 citation；否则 citation_support 会被虚高。
-- judge 偏差：同一套 hard baseline，DeepSeek 裁判 task_success 0.84 / correctness 4.45，qwen3.5:4b 是 0.89 / 4.12；qwen 对引用更宽松、对正确性更严格。
+- judge 偏差：同一套 hard baseline，DeepSeek 裁判 task_success 0.83 / correctness 4.45，qwen3.5:4b 是 0.86 / 4.12；qwen 对引用更宽松、对正确性更严格。
 - 结论：跨模型对照、人工抽查、分层报告三者缺一不可；单模型 judge 的绝对值不能当真理。
 
 ## 3. RAG：chunking、混合检索、RRF、rerank、引用
@@ -37,7 +39,7 @@
 - RRF 只看排名不看分数，避免两路分数量纲不同；常数 k 控制头部权重。
 - rerank 的输入要把 `source#section` 拼进文本，否则短片段和章节语义丢失；实测 q02 的相关片段从第 5 名升到第 1 名。
 - 引用：回答必须标 `[来源:文件#章节]`；judge 检查引用是否被工具证据支持，另有 citation_precision 做标签级统计。
-- 数字：easy R@3 0.8696→0.9130，MRR 0.8188→0.8623；hard MRR 0.8490→0.8878；代价是 p50 增加约 0.7 秒。
+- 数字：easy R@3 0.8696→0.9130，MRR 0.8188→0.8623；hard MRR 0.8490→0.8878。rerank 把 citation_precision 提到 0.9412，但本轮 task_success 0.83 低于 hybrid 的 0.86，p50 增加约 0.75 秒——收益要用更多样本验证。
 - 取舍：检索指标衡量预取管线，rerank 只作用于 agent 证据，所以两套指标的归因要分开说。
 
 ## 4. 可观测：trace 里看什么、如何定位失败
@@ -114,7 +116,7 @@
 
 - 现象：easy 集 q18 回答正确但 citation_support=false，task_success 失败。
 - 根因：回答里加了“降采样不等于脱敏/按环境动态调整”等工具片段没有的事实；judge 只看 ToolMessage 证据。
-- 修复：把 judge contexts 限定为 agent 实际 ToolMessage，预取 top-k 只用于检索指标；q18 保留为真实失败样本。
+- 修复：把 judge contexts 限定为 agent 实际 ToolMessage，预取 top-k 只用于检索指标；q18 在早期运行中失败，当前 easy baseline 已通过，但保留为回归案例。
 - 教训：引用支持率是“回答 vs 证据”的约束，不是“回答看起来合理”的评分。
 
 ### 10.3 PostgresIndexConfig 导入路径
@@ -137,14 +139,14 @@
 - 现象：easy 集 task_success 接近 1.0，任何改动都看不出差异。
 - 根因：easy 语料干净、问题单跳、答案集中；指标饱和。
 - 修复：新增 100 条 hard golden 和独立 docs_hard 语料，覆盖多跳、版本冲突、歧义、干扰证据和表格；easy 冻结不动。
-- 结果：hard baseline 0.84，歧义题 0.30，多跳 0.76，表格 0.80，重新有区分度。
+- 结果：hard baseline task_success 0.83，歧义题 0.30，多跳 0.76，表格 0.80，重新有区分度。
 - 教训：评测集饱和时先扩难度和失败类别，不要用更多同质样本刷分。
 
 ## 11. 如果面试官追问
 
 - **为什么不用更简单的向量检索？** 因为 hard 集的关键词/版本/表格题需要 BM25；RRF 让两路互补，rerank 再把证据压到 3 条。
 - **为什么 task_success 要求 citation_support？** 这是 RAG 而不是闭卷问答；没有证据支持的正确答案在生产里不可审计。
-- **为什么 hard 只有 0.84 也算成功？** 评测的目的不是刷到 1.0，而是暴露失败类别；0.84 比 easy 的 1.0 更有信息量。
-- **怎么证明检索有贡献？** closed-book 消融：同一 hard golden，移除 search_docs 后 task_success 从 0.84 掉到 0.11。
+- **为什么 hard 只有 0.83 也算成功？** 评测的目的不是刷到 1.0，而是暴露失败类别；0.83 比 easy 的 1.0 更有信息量。
+- **怎么证明检索有贡献？** closed-book 消融：同一 hard golden，移除 search_docs 后 answerable_success 从 0.812 掉到 0.035(3/85)。
 - **怎么处理 judge 偏差？** 跨模型对照、参考答案 rubric、人工抽查、报告分层；不把单一 judge 的绝对值当结论。
 - **生产化还差什么？** 真实用户库/密钥轮换/HTTPS、分布式限流、MCP HTTP 鉴权、hard 集多人标注、置信区间和 CI。

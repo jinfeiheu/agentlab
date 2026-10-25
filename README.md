@@ -45,7 +45,7 @@ langchain-demo/
 ├── docs/
 │   ├── interview-notes.md  # 面试口述稿与真实调试故事
 │   └── mcp-clients.md      # Claude Desktop/Code/Cursor 配置
-├── tests/               # 239 个离线测试,6 个集成测试默认跳过
+├── tests/               # 259 个离线测试,7 个集成测试默认跳过
 ├── pyproject.toml
 ├── Dockerfile
 ├── docker-compose.yml
@@ -106,7 +106,7 @@ uv run python ingest.py --reset
 
 # 离线测试(不需要网络/API Key/数据库)
 uv run pytest -q
-# 239 passed, 6 skipped
+# 259 passed, 7 skipped
 
 # 启动 CLI
 uv run python main.py
@@ -210,7 +210,7 @@ bash scripts/demo.sh
 - **问题**：纯向量 top-3 对关键词、表格和版本冲突不敏感。
 - **方案**：pgvector 摄入；BM25 + 向量各取 8 条，RRF(k=60)融合取 6；默认 bge-reranker-v2-m3 作为 cross-encoder 重排，top_n=3；引用格式 `[来源:文件#章节]`。
 - **取舍**：cross-encoder 在 CPU 上让 p50 增加约 0.7–1.4 秒(hard 约 0.75 秒，easy 约 1.35 秒)；LLM rerank 保留为可选第二层，默认关闭；rerank 只作用于 agent 的工具证据，预取检索指标不经过 rerank，因此 R@3/MRR 在 hybrid 与 hybrid+rerank 之间相同。
-- **指标**：easy baseline → hybrid+rerank：R@3 0.8696 → 0.9130，MRR 0.8188 → 0.8623，nDCG@3 0.8081 → 0.8462；hard baseline → hybrid+rerank：task_success 0.84 → 0.87，MRR 0.8490 → 0.8878。
+- **指标**：easy baseline → hybrid+rerank：R@3 0.8696 → 0.9130，MRR 0.8188 → 0.8623，nDCG@3 0.8081 → 0.8462；hard baseline → hybrid+rerank：answerable_success 0.8118 → 0.8588，MRR 0.8490 → 0.8878。rerank 在本轮 hard 上没有提升 task_success(0.83 vs hybrid 0.86)，但 citation_precision 从 0.9294 提升到 0.9412，代价是 p50 增加约 0.75 秒。
 - **失败模式**：中文长表格仍可能被 chunk 边界截断；hard 集的多跳和歧义题暴露召回与聚合不足。
 - **代码入口**：`ingest.py`、`retrieval.py`、`rag.py`、`tools.py`、`eval/retrieval_metrics.py`。
 
@@ -223,7 +223,7 @@ bash scripts/demo.sh
   - 记忆：checkpointer 短期、Store 长期；profile/fact/preference/episode 分命名空间；规则触发抽取、去重、episode TTL；上下文达 80% 时压缩，摘要写入 state.summary。
   - 多 Agent：Supervisor + researcher/writer/critic，MAX_STEPS=6；critic 失败默认 faithful=true，避免无限循环。
 - **取舍**：多 Agent 不绑定工具、不做压缩/画像注入，换来清晰的路由与更低的实现复杂度；自动记忆默认关闭，避免每轮多一次模型调用；`--simple` 也不做压缩/画像。
-- **指标**：hard closed-book 消融 task_success 0.11 vs open-book 0.84，说明检索贡献显著；MCP 发现 5 个工具并成功调用；跨用户 ticket/memory 测试通过。
+- **指标**：hard closed-book 消融的 answerable_success 为 0.0353，对比 open-book baseline 的 0.8118；task_success 为 0.12 vs 0.83(两者定义不同，见指标说明)。MCP 发现 5 个工具并成功调用；跨用户 ticket/memory 测试通过。
 - **失败模式**：hard 集的歧义题经常选择“请求澄清”而不是列出多种解释，judge 按参考答案只给部分分；qwen3.5:4b 裁判有 1 条缺 `reason` 的解析失败，走了安全默认。
 - **代码入口**：`mcp_server.py`、`mcp_utils_server.py`、`mcp_client.py`、`security.py`、`tickets.py`、`memory.py`、`context.py`、`multi_agent.py`。
 
@@ -238,10 +238,13 @@ bash scripts/demo.sh
 
 hard 语料 `data/docs_hard/` 包含噪声、重复、过期版本、互相冲突的内容和 Markdown 表格；它与 easy 的 `docs` collection 完全隔离。hard golden 每条带 `difficulty`、`category` 和 `reference_answer`。
 
+**hard 语料是一个合成的 AgentLab 文档世界，不是本仓库配置的说明书。** 其中 HNSW 参数、90 天 checkpoint 保留期、历史成本/延迟、以及“某功能有独立 span”等说法，是刻意放置的版本冲突、过期信息或噪声材料，用来测试模型的版本判断和抗干扰能力；它们不代表当前代码的真实行为。hard 指标衡量的是模型在这个文档世界里的检索、多跳推理和引用能力，而不是对代码配置的核查。真实行为以 README、`config.py`、测试和实际 trace 为准。
+
 ### 指标定义
 
 - 检索：Recall@3、MRR、nDCG@3；新增 Context Precision@3、Context Recall@3。
-- 生成：`task_success = correctness>=4 且 citation_support`；`tool_accuracy`/`citation_support_rate` 只统计可回答题；`refusal_rate` 只统计不可回答题。
+- 生成：`answerable_success = correctness>=4`(可回答题，跨开/闭卷可比)；开卷 `task_success = answerable_success 且 citation_support`；闭卷 `task_success = answerable_success`；不可回答题 `task_success = 拒答 且 faithfulness>=4`(拒答后继续编造不算成功)。
+- `tool_accuracy` 采用“必需工具子集”口径：额外的安全工具(例如算术题同时用 calculator)不扣分，缺少必需工具才算失败。`citation_support_rate` 只统计可回答题；`refusal_rate` 只统计不可回答题。
 - 新指标：Token F1、Exact Match(分词后)；Citation Precision(引用被工具证据支持的比例)。
 - 延迟/成本：p50/p95、总 token、按 DeepSeek 单价估算的成本。
 
@@ -249,35 +252,35 @@ hard 语料 `data/docs_hard/` 包含噪声、重复、过期版本、互相冲�
 
 **easy(27 条)**
 
-| retriever | judge | task_success | correctness | citation_support | R@3 | MRR | nDCG@3 | p50 ms | cost 元 |
-|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| baseline | DeepSeek | 1.0000 | 5.0000 | 1.0000 | .8696 | .8188 | .8081 | 3038 | .1879 |
-| baseline | qwen3.5:4b | .9630 | 4.5556 | 1.0000 | .8696 | .8188 | .8081 | 3396 | .1933 |
-| hybrid | DeepSeek | .9630 | 4.9259 | .9565 | .9130 | .8623 | .8462 | 2986 | .1858 |
-| hybrid | qwen3.5:4b | 1.0000 | 4.8148 | 1.0000 | .9130 | .8623 | .8462 | 2850 | .1873 |
-| hybrid+rerank | DeepSeek | 1.0000 | 5.0000 | 1.0000 | .9130 | .8623 | .8462 | 4391 | .1889 |
-| hybrid+rerank | qwen3.5:4b | 1.0000 | 4.6296 | 1.0000 | .9130 | .8623 | .8462 | 4570 | .1906 |
+| retriever | judge | task_success | answerable_success | correctness | citation_support | R@3 | MRR | nDCG@3 | p50 ms | cost 元 |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| baseline | DeepSeek | 1.0000 | 1.0000 | 5.0000 | 1.0000 | .8696 | .8188 | .8081 | 3038 | .1879 |
+| baseline | qwen3.5:4b | .9630 | .9565 | 4.5556 | 1.0000 | .8696 | .8188 | .8081 | 3396 | .1933 |
+| hybrid | DeepSeek | .9630 | 1.0000 | 4.9259 | .9565 | .9130 | .8623 | .8462 | 2986 | .1858 |
+| hybrid | qwen3.5:4b | 1.0000 | 1.0000 | 4.8148 | 1.0000 | .9130 | .8623 | .8462 | 2850 | .1873 |
+| hybrid+rerank | DeepSeek | 1.0000 | 1.0000 | 5.0000 | 1.0000 | .9130 | .8623 | .8462 | 4391 | .1889 |
+| hybrid+rerank | qwen3.5:4b | 1.0000 | 1.0000 | 4.6296 | 1.0000 | .9130 | .8623 | .8462 | 4570 | .1906 |
 
 **hard(100 条)**
 
-| retriever | judge | task_success | correctness | citation_support | R@3 | MRR | nDCG@3 | p50 ms | cost 元 |
-|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| baseline | DeepSeek | .8400 | 4.4500 | .9294 | .7875 | .8490 | .7698 | 2552 | .6371 |
-| baseline | qwen3.5:4b | .8900 | 4.1200 | .9647 | .7875 | .8490 | .7698 | 2733 | .6649 |
-| hybrid | DeepSeek | .8600 | 4.6600 | .9412 | .7722 | .8878 | .7808 | 2680 | .6423 |
-| hybrid | qwen3.5:4b | .9200 | 4.3000 | .9647 | .7722 | .8878 | .7808 | 2669 | .6447 |
-| hybrid+rerank | DeepSeek | .8700 | 4.5600 | .9176 | .7722 | .8878 | .7808 | 3426 | .6356 |
-| hybrid+rerank | qwen3.5:4b | .9200 | 4.1700 | .9647 | .7722 | .8878 | .7808 | 3429 | .6318 |
+| retriever | judge | task_success | answerable_success | correctness | citation_support | R@3 | MRR | nDCG@3 | p50 ms | cost 元 |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| baseline | DeepSeek | .8300 | .8118 | 4.4500 | .9294 | .7875 | .8490 | .7698 | 2552 | .6371 |
+| baseline | qwen3.5:4b | .8600 | .8706 | 4.1200 | .9647 | .7875 | .8490 | .7698 | 2733 | .6649 |
+| hybrid | DeepSeek | .8600 | .8706 | 4.6600 | .9412 | .7722 | .8878 | .7808 | 2680 | .6423 |
+| hybrid | qwen3.5:4b | .8800 | .9059 | 4.3000 | .9647 | .7722 | .8878 | .7808 | 2669 | .6447 |
+| hybrid+rerank | DeepSeek | .8300 | .8588 | 4.5600 | .9176 | .7722 | .8878 | .7808 | 3426 | .6356 |
+| hybrid+rerank | qwen3.5:4b | .8900 | .9059 | 4.1700 | .9647 | .7722 | .8878 | .7808 | 3429 | .6318 |
 
-**closed-book 消融(hard,DeepSeek 裁判)**：移除 `search_docs` 后 `task_success=0.11`、correctness=1.27、refusal_rate=0.7333、cost=0.2310；open-book baseline 为 0.84。差异说明检索证据是主要贡献。
+**closed-book 消融(hard,DeepSeek 裁判)**：移除 `search_docs` 后 `answerable_success=0.0353`(3/85)、`task_success=0.12`、correctness=1.27、refusal_rate=0.7333、cost=0.2310；open-book baseline 的 `answerable_success=0.8118`、`task_success=0.83`。开卷/闭卷的 task_success 定义不同，检索贡献主要看 `answerable_success`：3.5% vs 81.2%。
 
 ### 关键结论
 
-1. **easy 已饱和，hard 才有区分度**：easy 的 task_success 在 0.963–1.0；hard 在 0.84–0.92，且按难度分层可见 easy .946 / medium .765 / hard .793(DeepSeek baseline)。
-2. **失败集中在歧义、多跳、表格**：hard baseline 按类别 task_success：歧义 0.30、多跳 0.76、表格 0.80、单跳 0.967、时间/版本 1.0、不可回答 1.0。歧义题常选择“请求澄清”而非列出所有解释，参考答案严格 rubric 只给部分分；表格题有时不调用检索、直接凭记忆回答。
-3. **混合检索提升排序，rerank 提升证据质量**：hard MRR 0.8490(baseline) → 0.8878(hybrid)，nDCG@3 0.7698 → 0.7808；rerank 主要提升 citation_precision 和少量 task_success，代价是 p50 增加约 0.7 秒。
-4. **closed-book 明显更差**：0.11 vs 0.84，说明检索不是装饰。
-5. **裁判模型会改变结论**：hard baseline 下 DeepSeek 裁判 task_success .84 / correctness 4.45，qwen3.5:4b 为 .89 / 4.12；easy baseline 下 qwen 的 correctness 4.56 vs DeepSeek 5.0。qwen 对 citation_support 更宽松、对 correctness 更严格。跨模型对照是必要的，不能只看单一 judge。
+1. **easy 已饱和，hard 才有区分度**：easy 的 task_success 在 0.963–1.0；hard 在 0.83–0.89，且按难度分层可见 easy .946 / medium .765 / hard .759(DeepSeek baseline)。
+2. **失败集中在歧义、多跳、表格**：hard baseline 按类别 task_success：歧义 0.30、多跳 0.76、表格 0.80、单跳 0.967、时间/版本 1.0、不可回答 0.933。歧义题常选择“请求澄清”而非列出所有解释，参考答案严格 rubric 只给部分分；表格题有时不调用检索、直接凭记忆回答；不可回答题中有一条拒答后仍加了证据不支持的建议，被 faithfulness 判失败。
+3. **混合检索提升排序，rerank 不是免费午餐**：hard MRR 0.8490(baseline) → 0.8878(hybrid)，nDCG@3 0.7698 → 0.7808；rerank 把 citation_precision 从 0.9294 提到 0.9412，但本轮 task_success 为 0.83(hybrid 0.86)，且 p50 增加约 0.75 秒。样本量小加上严格 judge，rerank 的收益需要更多样本验证。
+4. **closed-book 明显更差**：`answerable_success` 3.5% vs 81.2%，说明检索不是装饰。
+5. **裁判模型会改变结论**：hard baseline 下 DeepSeek 裁判 task_success .83 / correctness 4.45，qwen3.5:4b 为 .86 / 4.12；easy baseline 下 qwen 的 correctness 4.56 vs DeepSeek 5.0。qwen 对 citation_support 更宽松、对 correctness 更严格。跨模型对照是必要的，不能只看单一 judge。
 6. **Token F1/EM 只作词面参考**：参考答案较长、回答措辞自由，hard 的 avg_token_f1 约 0.22、EM=0；这不能说明回答错，主指标仍是 reference-based judge。
 
 ### 复现命令
@@ -382,4 +385,4 @@ uv run python main.py --multi --user alice
 
 ## 面试怎么讲
 
-每个主题的 5–8 行口述稿、指标解释和 4 个真实调试故事见 [docs/interview-notes.md](docs/interview-notes.md)。
+每个主题的 5–8 行口述稿、指标解释和 5 个真实调试故事见 [docs/interview-notes.md](docs/interview-notes.md)。

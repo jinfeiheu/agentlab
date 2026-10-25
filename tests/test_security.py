@@ -4,6 +4,7 @@ import pytest
 
 from security import (
     SecurityDecision,
+    StreamingRedactor,
     ToolDenied,
     asecurity_wrapper,
     check_input,
@@ -41,6 +42,24 @@ def test_redacts_pii():
     assert "alice@example.com" not in out
     assert "13800138000" not in out
     assert "[EMAIL]" in out and "[PHONE]" in out
+
+
+def test_streaming_redactor_handles_pii_split_across_chunks():
+    redactor = StreamingRedactor(holdback=16)
+    chunks = ["联系 ali", "ce@exam", "ple.com 或 138", "00138000。"]
+    out = "".join(redactor.feed(chunk) for chunk in chunks)
+    out += redactor.flush()
+    assert "alice@example.com" not in out
+    assert "13800138000" not in out
+    assert "[EMAIL]" in out and "[PHONE]" in out
+
+
+def test_streaming_redactor_holds_unterminated_text_until_flush():
+    redactor = StreamingRedactor(holdback=16)
+    assert redactor.feed("alice@example.com") == ""
+    tail = redactor.flush()
+    assert "alice@example.com" not in tail
+    assert "[EMAIL]" in tail
 
 
 def test_redacts_id_and_card():
