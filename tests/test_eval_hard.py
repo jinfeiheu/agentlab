@@ -3,7 +3,7 @@
 import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 
-from config import HARD_DOCS_DIR, HARD_GOLDEN_PATH
+from agentlab.config import HARD_DOCS_DIR, HARD_GOLDEN_PATH
 from eval.data import load_golden
 from eval.judge import build_judge, judge_answer
 from eval.retrieval_metrics import (
@@ -13,7 +13,7 @@ from eval.retrieval_metrics import (
 )
 from eval.run_eval import evaluate, write_report
 from eval.text_metrics import exact_match, token_f1
-from rag import load_documents, split_documents
+from agentlab.rag.loaders import load_documents, split_documents
 from tests.fakes import FakeRetriever, FakeRunnable
 
 

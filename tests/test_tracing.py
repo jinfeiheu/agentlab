@@ -3,7 +3,7 @@ import json
 from langchain_core.runnables import RunnableLambda
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from tracing import setup_tracing, span
+from agentlab.observability.tracing import setup_tracing, span
 
 
 def test_span_records_attributes():

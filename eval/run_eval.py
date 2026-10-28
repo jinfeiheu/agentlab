@@ -11,7 +11,7 @@ from pathlib import Path
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
-from config import (
+from agentlab.config import (
     DEEPSEEK_MODEL,
     DOCS_DIR,
     EVAL_JUDGE_MODEL,
@@ -32,16 +32,16 @@ from eval.retrieval_metrics import (
     context_recall,
 )
 from eval.text_metrics import exact_match, token_f1
-from graph import build_graph
-from metrics import MetricsRecorder, Usage, usage_from_message
-from models import build_chat_model
-from rag import build_inmemory_retriever, format_docs
-from retrieval import (
+from agentlab.agent.graph import build_graph
+from agentlab.observability.metrics import MetricsRecorder, Usage, usage_from_message
+from agentlab.models import build_chat_model
+from agentlab.rag.loaders import build_inmemory_retriever, format_docs
+from agentlab.rag.retrieval import (
     build_pgvector_hybrid_retriever,
     build_reranker,
     extract_sources,
 )
-from tools import calculator, make_search_tool, send_report
+from agentlab.tools.builtin import calculator, make_search_tool, send_report
 
 _REFUSAL_MARKERS = (
     "无法回答",

@@ -10,9 +10,9 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.store.postgres import AsyncPostgresStore
 
-import config
-from graph import build_graph
-from tools import calculator
+import agentlab.config as config
+from agentlab.agent.graph import build_graph
+from agentlab.tools.builtin import calculator
 
 TEST_DB = os.getenv("TEST_DATABASE_URL") or config.DATABASE_URL
 
@@ -114,7 +114,7 @@ async def test_postgres_store_isolates_users():
 
 async def test_build_services_persists_across_instances(monkeypatch):
     """USE_DB=true 时服务使用 Postgres;新实例仍能读到旧会话。"""
-    import api
+    import agentlab.api.services as api
     from tests.fakes import FakeRetriever
 
     monkeypatch.setattr(api, "USE_DB", True)

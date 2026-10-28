@@ -2,8 +2,8 @@ import os
 
 import pytest
 
-import tickets
-from auth import UserContext
+from agentlab.tools import tickets
+from agentlab.security.auth import UserContext
 from tests.fakes import FakeRuntime
 
 integration = pytest.mark.skipif(

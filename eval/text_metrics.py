@@ -2,7 +2,7 @@
 
 from collections import Counter
 
-from retrieval import tokenize
+from agentlab.rag.retrieval import tokenize
 
 
 def token_f1(prediction: str, reference: str) -> float:

@@ -8,12 +8,12 @@ from langgraph.store.memory import InMemoryStore
 from langgraph.types import Command
 from pydantic import Field
 
-import graph as graph_module
-from auth import UserContext
-from graph import build_graph
-from memory import MemoryItem, save_memory, search_memory, upsert_memory
+from agentlab.agent import graph as graph_module
+from agentlab.security.auth import UserContext
+from agentlab.agent.graph import build_graph
+from agentlab.agent.memory import MemoryItem, save_memory, search_memory, upsert_memory
 from tests.fakes import FakeEmbeddings
-from tools import calculator, send_report
+from agentlab.tools.builtin import calculator, send_report
 
 
 @tool

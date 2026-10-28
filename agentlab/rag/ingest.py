@@ -6,9 +6,9 @@ from pathlib import Path
 from langchain_core.documents import Document
 from langchain_postgres import PGVector
 
-from config import DATABASE_URL, DOCS_DIR, PG_COLLECTION
-from models import build_embeddings
-from rag import load_documents, split_documents
+from agentlab.config import DATABASE_URL, DOCS_DIR, PG_COLLECTION
+from agentlab.models import build_embeddings
+from agentlab.rag.loaders import load_documents, split_documents
 
 EMBEDDING_DIM = 1024
 

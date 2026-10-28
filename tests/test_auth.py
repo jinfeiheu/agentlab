@@ -3,7 +3,7 @@ import time
 import jwt as pyjwt
 import pytest
 
-from auth import DEMO_USERS, login, sign_token, verify_token
+from agentlab.security.auth import DEMO_USERS, login, sign_token, verify_token
 
 TEST_SECRET = "test-secret-0123456789abcdef0123456789"
 

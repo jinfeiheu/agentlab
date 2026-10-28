@@ -2,11 +2,12 @@
 
 import asyncio
 import inspect
+import sys
 
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
-from config import (
-    BASE_DIR,
+from agentlab.config import (
+    PROJECT_ROOT,
     MCP_AGENTLAB_URL,
     MCP_TRANSPORT,
     MCP_UTILS_URL,
@@ -15,15 +16,15 @@ from config import (
 MCP_SERVER_CONFIG = {
     "agentlab": {
         "transport": "stdio",
-        "command": "uv",
-        "args": ["run", "python", "mcp_server.py"],
-        "cwd": str(BASE_DIR),
+        "command": sys.executable,
+        "args": ["-m", "agentlab.mcp.knowledge_server"],
+        "cwd": str(PROJECT_ROOT),
     },
     "utils": {
         "transport": "stdio",
-        "command": "uv",
-        "args": ["run", "python", "mcp_utils_server.py"],
-        "cwd": str(BASE_DIR),
+        "command": sys.executable,
+        "args": ["-m", "agentlab.mcp.utils_server"],
+        "cwd": str(PROJECT_ROOT),
     },
 }
 

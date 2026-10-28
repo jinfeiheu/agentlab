@@ -8,44 +8,55 @@
 
 ```
 langchain-demo/
-├── main.py              # CLI:手写图 / --simple / --multi / --user
-├── graph.py             # 单 Agent 图:压缩 → agent ⇄ tools
-├── multi_agent.py       # Supervisor 多 Agent:researcher/writer/critic
-├── api.py               # FastAPI:JWT、限流、SSE、HITL resume、健康检查
-├── static/index.html    # 最小网页客户端
-├── models.py            # 对话、嵌入、裁判、fallback 模型工厂
-├── config.py            # 全部环境变量集中管理
-├── auth.py              # demo 用户、HS256 JWT、UserContext
-├── security.py          # 注入检测、PII 脱敏、工具白名单
-├── tickets.py           # 私有工单查询与跨用户隔离
-├── memory.py            # 结构化长期记忆、画像、episode、TTL
-├── context.py           # token 估算、裁剪、压缩、摘要
-├── rag.py               # Markdown 加载、标题切分、稳定 chunk_id
-├── retrieval.py         # 混合检索(BM25 + 向量 + RRF)、rerank、引用抽取
-├── ingest.py            # easy/hard 语料到 pgvector
-├── tracing.py           # OpenTelemetry / OpenInference → Phoenix
-├── tools.py             # calculator / search_docs / send_report
-├── mcp_server.py        # MCP 知识库 server:search_docs/list_sources/doc_stats
-├── mcp_utils_server.py  # MCP 工具 server:calculator/word_count
-├── mcp_client.py        # 聚合两个 MCP server 的工具
-├── data/docs/           # easy 冻结语料:8 篇 / 54 chunks
-├── data/docs_hard/      # hard 语料:10 篇 / 66 chunks(噪声/冲突/表格)
-├── eval/                # golden 集、judge、指标、runner
-│   ├── golden.jsonl     # easy:27 条(4 条不可回答)
-│   ├── golden_hard.jsonl# hard:100 条(六类)
-│   ├── judge.py         # LLM-as-judge,支持参考答案与跨模型
+├── agentlab/
+│   ├── cli.py               # CLI:手写图 / --simple / --multi / --user
+│   ├── config.py            # 全部环境变量与项目路径
+│   ├── models.py            # 对话、嵌入、裁判、fallback 模型工厂
+│   ├── api/
+│   │   ├── app.py           # FastAPI:JWT、限流、SSE、HITL resume、健康检查
+│   │   └── static/index.html# 最小网页客户端
+│   ├── agent/
+│   │   ├── graph.py         # 单 Agent 图:压缩 → agent ⇄ tools
+│   │   ├── multi_agent.py   # Supervisor 多 Agent:researcher/writer/critic
+│   │   ├── memory.py        # 结构化长期记忆、画像、episode、TTL
+│   │   └── context.py       # token 估算、裁剪、压缩、摘要
+│   ├── rag/
+│   │   ├── loaders.py       # Markdown 加载、标题切分、稳定 chunk_id
+│   │   ├── retrieval.py     # 混合检索(BM25 + 向量 + RRF)、rerank、引用抽取
+│   │   └── ingest.py        # easy/hard 语料到 pgvector
+│   ├── tools/
+│   │   ├── builtin.py       # calculator / search_docs / send_report
+│   │   └── tickets.py       # 私有工单查询与跨用户隔离
+│   ├── security/
+│   │   ├── auth.py          # demo 用户、HS256 JWT、UserContext
+│   │   └── guard.py         # 注入检测、PII 脱敏、工具白名单
+│   ├── mcp/
+│   │   ├── knowledge_server.py  # MCP 知识库 server
+│   │   ├── utils_server.py      # MCP 工具 server
+│   │   └── client.py            # 聚合两个 MCP server
+│   └── observability/
+│       ├── tracing.py       # OpenTelemetry / OpenInference → Phoenix
+│       └── metrics.py       # token、成本与延迟指标
+├── data/docs/               # easy 冻结语料:8 篇 / 54 chunks
+├── data/docs_hard/          # hard 语料:10 篇 / 66 chunks(噪声/冲突/表格)
+├── eval/                    # golden 集、judge、指标、runner
+│   ├── golden.jsonl         # easy:27 条(4 条不可回答)
+│   ├── golden_hard.jsonl    # hard:100 条(六类)
+│   ├── judge.py             # LLM-as-judge,支持参考答案与跨模型
 │   ├── retrieval_metrics.py
-│   ├── text_metrics.py  # token F1 / Exact Match
-│   └── run_eval.py      # 分层报告与 closed-book 消融
+│   ├── text_metrics.py      # token F1 / Exact Match
+│   └── run_eval.py          # 分层报告与 closed-book 消融
 ├── scripts/
-│   ├── start_db.sh      # 启动 pgvector 并写入 demo 工单
-│   ├── start_phoenix.sh # 启动 Phoenix
-│   ├── seed_demo.sql    # users/tickets 种子
-│   └── demo.sh          # 一键演示脚本(见下)
+│   ├── start_db.sh          # 启动 pgvector 并写入 demo 工单
+│   ├── start_phoenix.sh     # 启动 Phoenix
+│   ├── seed_demo.sql        # users/tickets 种子
+│   └── demo.sh              # 一键演示脚本(见下)
 ├── docs/
-│   ├── interview-notes.md  # 面试口述稿与真实调试故事
-│   └── mcp-clients.md      # Claude Desktop/Code/Cursor 配置
-├── tests/               # 259 个离线测试,7 个集成测试默认跳过
+│   ├── interview-notes.md   # 面试口述稿与真实调试故事
+│   ├── mcp-clients.md       # Claude Desktop/Code/Cursor 配置
+│   ├── results/             # 最终评测矩阵 Markdown 摘要
+│   └── archive/             # 2026-10-20 旧计划与规格
+├── tests/                   # 268 个离线测试,7 个集成测试默认跳过
 ├── pyproject.toml
 ├── Dockerfile
 ├── docker-compose.yml
@@ -56,11 +67,11 @@ langchain-demo/
 
 ```
                     ┌──────────────────────────────┐
-用户 ── CLI main.py │ 手写 StateGraph / create_agent │
+用户 ── CLI agentlab/cli.py │ 手写 StateGraph / create_agent │
    │   --multi      │ Supervisor 多 Agent           │
    │                └──────────────┬───────────────┘
    │                               │
-   └─ 浏览器 → FastAPI api.py      │  JWT / 限流 / SSE / HITL
+   └─ 浏览器 → FastAPI agentlab/api/app.py │  JWT / 限流 / SSE / HITL
         (static/index.html)        │
                                    ▼
                     ┌──────────────────────────────┐
@@ -79,12 +90,14 @@ langchain-demo/
                                             ▼
                     Postgres: checkpoints / Store / tickets / docs
                     OTel/OpenInference → Phoenix (http://localhost:6006)
-                    MCP servers: mcp_server.py + mcp_utils_server.py
+                    MCP servers: agentlab/mcp/knowledge_server.py + utils_server.py
 ```
 
 ## 快速开始
 
-前置条件：Python 3.12 + [uv](https://docs.astral.sh/uv/)、Docker、Ollama、一个 DeepSeek API Key。Phoenix 需要 `uvx`，只在看 trace 时使用。
+前置条件：Python 3.12 + [uv](https://docs.astral.sh/uv/)、Docker（仅用于 pgvector 等依赖）、Ollama、一个 DeepSeek API Key。Phoenix 需要 `uvx`，只在看 trace 时使用。
+
+本地开发**不需要构建应用镜像**：源码直接用 `uv run` 运行，Docker 只承载 pgvector/Postgres 依赖；`Dockerfile` 和 `docker-compose.yml` 仅作为部署示例保留。
 
 ```bash
 cd langchain-demo
@@ -102,23 +115,23 @@ ollama pull bge-m3
 bash scripts/start_db.sh
 
 # 把 easy 语料切成 54 个 chunk 写入 docs collection
-uv run python ingest.py --reset
+uv run python -m agentlab.rag.ingest --reset
 
 # 离线测试(不需要网络/API Key/数据库)
 uv run pytest -q
-# 259 passed, 7 skipped
+# 268 passed, 7 skipped
 
 # 启动 CLI
-uv run python main.py
+uv run agentlab
 ```
 
-`main.py` 的几种模式：
+`agentlab` 的几种模式：
 
 ```bash
-uv run python main.py                       # 手写 StateGraph
-uv run python main.py --simple              # create_agent 高层封装
-uv run python main.py --multi --user alice  # Supervisor 多 Agent
-uv run python main.py --user bob            # 切换 demo 用户
+uv run agentlab                       # 手写 StateGraph
+uv run agentlab --simple              # create_agent 高层封装
+uv run agentlab --multi --user alice  # Supervisor 多 Agent
+uv run agentlab --user bob            # 切换 demo 用户
 ```
 
 对话中可用 `/new` 开新会话、`/help` 看命令、`/quit` 退出。
@@ -127,10 +140,10 @@ uv run python main.py --user bob            # 切换 demo 用户
 
 ```bash
 # 默认内存 checkpointer/Store；只适合本地快速试用
-uv run uvicorn api:app --host 0.0.0.0 --port 8000
+uv run uvicorn agentlab.api.app:app --host 0.0.0.0 --port 8000
 
 # 使用 Postgres 持久化；重启后同一 session_id 仍能继续
-USE_DB=true uv run uvicorn api:app --host 0.0.0.0 --port 8000
+USE_DB=true uv run uvicorn agentlab.api.app:app --host 0.0.0.0 --port 8000
 ```
 
 浏览器打开 `http://localhost:8000`，用 `alice / alice-pass`、`bob / bob-pass` 或 `carol / carol-pass` 登录。页面支持流式输出、工具块、HITL 确认/取消、新会话。
@@ -159,20 +172,20 @@ bash scripts/start_phoenix.sh
 # UI: http://localhost:6006
 
 # 启动 CLI 或 API 时打开导出
-TRACING_ENABLED=true uv run python main.py
+TRACING_ENABLED=true uv run agentlab
 # 或
-TRACING_ENABLED=true USE_DB=true uv run uvicorn api:app --port 8000
+TRACING_ENABLED=true USE_DB=true uv run uvicorn agentlab.api.app:app --port 8000
 ```
 
 ### MCP
 
 ```bash
 # 默认 stdio：客户端拉起两个 server 子进程
-uv run python mcp_client.py
+uv run python -m agentlab.mcp.client
 # 工具: ['calculator', 'doc_stats', 'list_sources', 'search_docs', 'word_count']
 
 # API 通过 MCP 使用公共检索/计算工具(仍保留本地 ticket/memory/send_report)
-USE_MCP=true uv run uvicorn api:app --port 8001
+USE_MCP=true uv run uvicorn agentlab.api.app:app --port 8001
 ```
 
 HTTP transport 与外部客户端配置见 [docs/mcp-clients.md](docs/mcp-clients.md)。
@@ -194,7 +207,7 @@ bash scripts/demo.sh
 - **取舍**：judge 用 DeepSeek 的 JSON mode(thinking mode 不支持 tool_choice)；judge 只看 agent 实际检索到的 ToolMessage，不把预取 top-k 算进 citation_support，指标更严格但更接近真实证据。
 - **指标**：easy baseline `task_success=1.0`、`citation_support=1.0`、`R@3=0.8696`、`MRR=0.8188`、`nDCG@3=0.8081`。
 - **失败模式**：easy 集接近饱和；q18 曾出现回答加入“降采样不等于脱敏”等工具证据不支持的内容，citation_support=false。
-- **代码入口**：`eval/`、`tracing.py`、`scripts/start_phoenix.sh`。
+- **代码入口**：`eval/`、`agentlab/observability/tracing.py`、`scripts/start_phoenix.sh`。
 
 ### 阶段 2：服务化与持久化
 
@@ -203,7 +216,7 @@ bash scripts/demo.sh
 - **取舍**：限流是进程内内存计数，不是分布式；超时用 `asyncio.wait_for`；中断后若用户直接发新消息，`_prepare_thread` 会修复/重置悬空 tool_call，优先保证不 400。
 - **指标/验证**：重启 API 后同一 session_id 能继续；SSE 的 tool_call/tool_result 用 id 配对；HITL 确认/取消可用。
 - **失败模式**：中断/并发会留下 assistant tool_calls 没有对应 ToolMessage，LangGraph 会报 400；现在每轮前补齐或重置。
-- **代码入口**：`api.py`、`auth.py`、`scripts/start_db.sh`、`static/index.html`。
+- **代码入口**：`agentlab/api/app.py`、`agentlab/security/auth.py`、`scripts/start_db.sh`、`agentlab/api/static/index.html`。
 
 ### 阶段 3：RAG 升级
 
@@ -212,7 +225,7 @@ bash scripts/demo.sh
 - **取舍**：cross-encoder 在 CPU 上让 p50 增加约 0.7–1.4 秒(hard 约 0.75 秒，easy 约 1.35 秒)；LLM rerank 保留为可选第二层，默认关闭；rerank 只作用于 agent 的工具证据，预取检索指标不经过 rerank，因此 R@3/MRR 在 hybrid 与 hybrid+rerank 之间相同。
 - **指标**：easy baseline → hybrid+rerank：R@3 0.8696 → 0.9130，MRR 0.8188 → 0.8623，nDCG@3 0.8081 → 0.8462；hard baseline → hybrid+rerank：answerable_success 0.8118 → 0.8588，MRR 0.8490 → 0.8878。rerank 在本轮 hard 上没有提升 task_success(0.83 vs hybrid 0.86)，但 citation_precision 从 0.9294 提升到 0.9412，代价是 p50 增加约 0.75 秒。
 - **失败模式**：中文长表格仍可能被 chunk 边界截断；hard 集的多跳和歧义题暴露召回与聚合不足。
-- **代码入口**：`ingest.py`、`retrieval.py`、`rag.py`、`tools.py`、`eval/retrieval_metrics.py`。
+- **代码入口**：`agentlab/rag/ingest.py`、`agentlab/rag/retrieval.py`、`agentlab/rag/loaders.py`、`agentlab/tools/builtin.py`、`eval/retrieval_metrics.py`。
 
 ### 阶段 4：MCP、安全、记忆、多 Agent
 
@@ -225,7 +238,7 @@ bash scripts/demo.sh
 - **取舍**：多 Agent 不绑定工具、不做压缩/画像注入，换来清晰的路由与更低的实现复杂度；自动记忆默认关闭，避免每轮多一次模型调用；`--simple` 也不做压缩/画像。
 - **指标**：hard closed-book 消融的 answerable_success 为 0.0353，对比 open-book baseline 的 0.8118；task_success 为 0.12 vs 0.83(两者定义不同，见指标说明)。MCP 发现 5 个工具并成功调用；跨用户 ticket/memory 测试通过。
 - **失败模式**：hard 集的歧义题经常选择“请求澄清”而不是列出多种解释，judge 按参考答案只给部分分；qwen3.5:4b 裁判有 1 条缺 `reason` 的解析失败，走了安全默认。
-- **代码入口**：`mcp_server.py`、`mcp_utils_server.py`、`mcp_client.py`、`security.py`、`tickets.py`、`memory.py`、`context.py`、`multi_agent.py`。
+- **代码入口**：`agentlab/mcp/knowledge_server.py`、`agentlab/mcp/utils_server.py`、`agentlab/mcp/client.py`、`agentlab/security/guard.py`、`agentlab/tools/tickets.py`、`agentlab/agent/memory.py`、`agentlab/agent/context.py`、`agentlab/agent/multi_agent.py`。
 
 ## 评测方法与结果
 
@@ -238,7 +251,7 @@ bash scripts/demo.sh
 
 hard 语料 `data/docs_hard/` 包含噪声、重复、过期版本、互相冲突的内容和 Markdown 表格；它与 easy 的 `docs` collection 完全隔离。hard golden 每条带 `difficulty`、`category` 和 `reference_answer`。
 
-**hard 语料是一个合成的 AgentLab 文档世界，不是本仓库配置的说明书。** 其中 HNSW 参数、90 天 checkpoint 保留期、历史成本/延迟、以及“某功能有独立 span”等说法，是刻意放置的版本冲突、过期信息或噪声材料，用来测试模型的版本判断和抗干扰能力；它们不代表当前代码的真实行为。hard 指标衡量的是模型在这个文档世界里的检索、多跳推理和引用能力，而不是对代码配置的核查。真实行为以 README、`config.py`、测试和实际 trace 为准。
+**hard 语料是一个合成的 AgentLab 文档世界，不是本仓库配置的说明书。** 其中 HNSW 参数、90 天 checkpoint 保留期、历史成本/延迟、以及“某功能有独立 span”等说法，是刻意放置的版本冲突、过期信息或噪声材料，用来测试模型的版本判断和抗干扰能力；它们不代表当前代码的真实行为。hard 指标衡量的是模型在这个文档世界里的检索、多跳推理和引用能力，而不是对代码配置的核查。真实行为以 README、`agentlab/config.py`、测试和实际 trace 为准。
 
 ### 指标定义
 
@@ -310,14 +323,13 @@ uv run python -m eval.run_eval --corpus hard --retriever baseline \
   --closed-book --output eval/results/hard-closed-book.md
 
 # 快速 smoke
-uv run python -m eval.run_eval --corpus hard --limit 3 \
-  --output eval/results/hard-smoke.md
+uv run python -m eval.run_eval --corpus hard --limit 3
 ```
 
 hard 语料首次评测前需要摄入：
 
 ```bash
-uv run python ingest.py --docs-dir data/docs_hard --collection docs_hard --reset
+uv run python -m agentlab.rag.ingest --docs-dir data/docs_hard --collection docs_hard --reset
 ```
 
 ## 安全模型
@@ -351,7 +363,7 @@ uv run python ingest.py --docs-dir data/docs_hard --collection docs_hard --reset
 ## 多 Agent
 
 ```bash
-uv run python main.py --multi --user alice
+uv run agentlab --multi --user alice
 # 问:checkpointer 是什么?
 # 观察:supervisor → researcher → writer → critic → __end__
 ```
@@ -359,7 +371,7 @@ uv run python main.py --multi --user alice
 - 节点：researcher 检索写 research_notes；writer 基于笔记生成带引用的 draft；critic 用结构化输出判断是否忠实；supervisor 用 `Command(goto=...)` 路由。
 - 上限：`MAX_STEPS=6`；critic 判定不忠实且未到上限时回到 writer；critic 调用失败默认 faithful=true。
 - 取舍：多 Agent 不绑定工具、不做上下文压缩、不注入用户画像；它适合演示“检索 → 写作 → 审阅”的分工，不适合替代单 Agent 的工具循环。
-- 代码入口：`multi_agent.py`、`main.py` 的 `--multi`。
+- 代码入口：`agentlab/agent/multi_agent.py`、`agentlab/cli.py` 的 `--multi`。
 
 ## 已知限制与下一步
 
@@ -380,8 +392,8 @@ uv run python main.py --multi --user alice
 - **Ollama connection refused**：先 `ollama serve`，再 `ollama pull bge-m3`；首次 rerank 会下载 `BAAI/bge-reranker-v2-m3`。
 - **Postgres 连接失败/健康检查 503**：运行 `bash scripts/start_db.sh`；hard 评测还要先摄入 `docs_hard`。
 - **Phoenix 看不到 trace**：确认 `TRACING_ENABLED=true`、Phoenix 在 6006、进程退出时调用了 `shutdown_tracing`；API 只在真实启动(未注入 fake services)时初始化 tracing。
-- **MCP 启动失败**：`USE_MCP=true` 要求两个 server 都可用且提供 `search_docs`+`calculator`；先单独跑 `uv run python mcp_client.py`。
-- **评测结果和 README 不完全一样**：模型输出有随机性；本 README 记录的是 2026-10-24 的具体运行，复现时以 `eval/results/*.json` 为准。
+- **MCP 启动失败**：`USE_MCP=true` 要求两个 server 都可用且提供 `search_docs`+`calculator`；先单独跑 `uv run python -m agentlab.mcp.client`。
+- **评测结果和 README 不完全一样**：模型输出有随机性；本 README 记录的是 2026-10-24 的具体运行。最终矩阵的 Markdown 摘要见 `docs/results/`，原始 JSON 在本地 `eval/results/`（被 gitignore）。
 
 ## 面试怎么讲
 

@@ -10,9 +10,9 @@ from langchain_core.messages import BaseMessage
 from langchain_core.tools import tool
 from langgraph.prebuilt import ToolRuntime
 
-from auth import UserContext
-from config import MEMORY_EPISODE_TTL_DAYS
-from context import summarize_messages
+from agentlab.agent.context import summarize_messages
+from agentlab.config import MEMORY_EPISODE_TTL_DAYS
+from agentlab.security.auth import UserContext
 
 MEMORY_TYPES = frozenset({"profile", "preference", "fact", "task", "episode"})
 # 模型显式保存时可能只给 name/color 这类短 key,这里做一次类型推断。

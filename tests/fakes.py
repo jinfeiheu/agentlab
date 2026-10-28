@@ -132,7 +132,7 @@ def auth_client(services):
     """创建已登录的 TestClient;延迟导入 serve 依赖,Phase 1 也能导入本模块。"""
     from fastapi.testclient import TestClient
 
-    from api import create_app
-    from auth import sign_token
+    from agentlab.api.app import create_app
+    from agentlab.security.auth import sign_token
 
     return TestClient(create_app(services=services)), sign_token("user_alice")

@@ -11,8 +11,8 @@ from langchain_text_splitters import (
     RecursiveCharacterTextSplitter,
 )
 
-from config import RAG_TOP_K
-from models import build_embeddings
+from agentlab.config import RAG_TOP_K
+from agentlab.models import build_embeddings
 
 _HEADERS = [("#", "title"), ("##", "section")]
 

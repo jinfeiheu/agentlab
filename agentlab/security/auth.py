@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import jwt
 from pydantic import BaseModel
 
-from config import AUTH_SECRET
+from agentlab.config import AUTH_SECRET
 
 
 @dataclass(frozen=True)

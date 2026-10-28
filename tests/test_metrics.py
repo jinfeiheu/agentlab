@@ -1,7 +1,7 @@
 import pytest
 from langchain_core.messages import AIMessage
 
-from metrics import MetricsRecorder, Usage, estimate_cost, usage_from_message
+from agentlab.observability.metrics import MetricsRecorder, Usage, estimate_cost, usage_from_message
 
 
 def test_usage_and_cost():

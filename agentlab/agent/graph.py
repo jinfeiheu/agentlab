@@ -8,16 +8,16 @@ from langgraph.graph import START, MessagesState, StateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.runtime import Runtime
 
-from auth import UserContext
-from config import CONTEXT_MAX_TOKENS, ENABLE_AUTO_MEMORY
-from context import (
+from agentlab.agent.context import (
     estimate_tokens,
     plan_compaction,
     summarize_messages,
     trim_messages,
 )
-from memory import load_profile, save_episode
-from security import asecurity_wrapper, ensure_tools_allowed, security_wrapper
+from agentlab.agent.memory import load_profile, save_episode
+from agentlab.config import CONTEXT_MAX_TOKENS, ENABLE_AUTO_MEMORY
+from agentlab.security.auth import UserContext
+from agentlab.security.guard import asecurity_wrapper, ensure_tools_allowed, security_wrapper
 
 SYSTEM_PROMPT = """你是一个中文技术问答助手,回答要简洁、准确。
 

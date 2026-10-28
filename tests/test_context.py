@@ -5,7 +5,7 @@ from langchain_core.messages import (
     ToolMessage,
 )
 
-from context import (
+from agentlab.agent.context import (
     compress_tool_content,
     estimate_tokens,
     plan_compaction,

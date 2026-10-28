@@ -2,8 +2,8 @@ from langchain_core.documents import Document
 from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
-import models
-from multi_agent import build_multi_agent_graph, decide_next
+from agentlab import models
+from agentlab.agent.multi_agent import build_multi_agent_graph, decide_next
 from tests.fakes import FakeRetriever
 
 

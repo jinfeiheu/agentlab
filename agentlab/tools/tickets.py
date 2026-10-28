@@ -5,8 +5,8 @@ import hmac
 from langchain_core.tools import tool
 from langgraph.prebuilt import ToolRuntime
 
-from auth import UserContext
-from config import DATABASE_URL
+from agentlab.config import DATABASE_URL
+from agentlab.security.auth import UserContext
 
 
 def can_access_ticket(ticket_user_id: str, current_user_id: str) -> bool:

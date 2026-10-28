@@ -125,10 +125,10 @@ def build_pgvector_hybrid_retriever(
     collection_name: str | None = None,
 ) -> HybridRetriever:
     """从 pgvector collection 构建混合检索器;默认仍使用 docs / PG_COLLECTION。"""
-    from config import DATABASE_URL, DOCS_DIR, PG_COLLECTION
+    from agentlab.config import DATABASE_URL, DOCS_DIR, PG_COLLECTION
     from langchain_postgres import PGVector
-    from models import build_embeddings
-    from rag import load_documents, split_documents
+    from agentlab.models import build_embeddings
+    from agentlab.rag.loaders import load_documents, split_documents
 
     docs_dir = docs_dir or DOCS_DIR
     collection_name = collection_name or PG_COLLECTION
@@ -277,7 +277,7 @@ def build_reranker(
             )
         )
     if use_llm:
-        from models import build_judge_model
+        from agentlab.models import build_judge_model
 
         rerankers.append(
             LLMReranker(build_judge_model(), top_n=llm_top_n)

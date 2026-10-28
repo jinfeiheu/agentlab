@@ -8,8 +8,8 @@ from langchain_core.messages import (
     ToolMessage,
 )
 
-import main
-from auth import UserContext
+from agentlab import cli as main
+from agentlab.security.auth import UserContext
 
 
 def test_ensure_prerequisites_requires_deepseek_key(monkeypatch):

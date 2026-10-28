@@ -5,10 +5,10 @@ import os
 import pytest
 from langchain_core.documents import Document
 
-import ingest
-from config import DATABASE_URL, DOCS_DIR, PG_COLLECTION
-from ingest import build_vector_store, main
-from rag import load_documents, split_documents
+from agentlab.rag import ingest
+from agentlab.config import DATABASE_URL, DOCS_DIR, PG_COLLECTION
+from agentlab.rag.ingest import build_vector_store, main
+from agentlab.rag.loaders import load_documents, split_documents
 
 integration = pytest.mark.skipif(
     os.getenv("RUN_INTEGRATION") != "1",

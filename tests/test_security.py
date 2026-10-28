@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from security import (
+from agentlab.security.guard import (
     SecurityDecision,
     StreamingRedactor,
     ToolDenied,

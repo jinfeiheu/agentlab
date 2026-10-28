@@ -11,9 +11,16 @@ from langchain_core.messages import (
     ToolMessage,
 )
 
-import api
-from api import create_app
-from auth import UserContext, sign_token
+import agentlab.api.app as api
+import agentlab.api.services as api_services
+from agentlab.api.app import create_app
+from agentlab.api.services import (
+    _maybe_extract_memory,
+    _pending_tool_calls,
+    _post_turn_memory,
+)
+from agentlab.api.sse import _chat_events, _tool_events
+from agentlab.security.auth import UserContext, sign_token
 from tests.fakes import RecordingGraph, auth_client, bearer, fake_services
 
 
@@ -218,17 +225,17 @@ def test_rate_limit_returns_429(monkeypatch):
 
 
 def test_needs_db_check_covers_hybrid_and_mcp(monkeypatch):
-    monkeypatch.setattr(api, "USE_DB", False)
-    monkeypatch.setattr(api, "RAG_MODE", "baseline")
-    monkeypatch.setattr(api, "USE_MCP", False)
-    assert api._needs_db_check() is False
-    monkeypatch.setattr(api, "RAG_MODE", "hybrid")
-    assert api._needs_db_check() is True
-    monkeypatch.setattr(api, "RAG_MODE", "baseline")
-    monkeypatch.setattr(api, "USE_MCP", True)
-    assert api._needs_db_check() is True
-    monkeypatch.setattr(api, "USE_DB", True)
-    assert api._needs_db_check() is True
+    monkeypatch.setattr(api_services, "USE_DB", False)
+    monkeypatch.setattr(api_services, "RAG_MODE", "baseline")
+    monkeypatch.setattr(api_services, "USE_MCP", False)
+    assert api_services._needs_db_check() is False
+    monkeypatch.setattr(api_services, "RAG_MODE", "hybrid")
+    assert api_services._needs_db_check() is True
+    monkeypatch.setattr(api_services, "RAG_MODE", "baseline")
+    monkeypatch.setattr(api_services, "USE_MCP", True)
+    assert api_services._needs_db_check() is True
+    monkeypatch.setattr(api_services, "USE_DB", True)
+    assert api_services._needs_db_check() is True
 
 
 def test_healthz():
@@ -437,10 +444,10 @@ def test_pending_tool_calls_detects_dangling_and_intervening():
         content="",
         tool_calls=[{"name": "search_docs", "args": {"query": "x"}, "id": "c1"}],
     )
-    assert api._pending_tool_calls([call]) == ({"c1": "search_docs"}, True)
+    assert _pending_tool_calls([call]) == ({"c1": "search_docs"}, True)
     resolved = ToolMessage(content="ok", name="search_docs", tool_call_id="c1")
-    assert api._pending_tool_calls([call, resolved]) == ({}, True)
-    assert api._pending_tool_calls([call, HumanMessage(content="next")]) == (
+    assert _pending_tool_calls([call, resolved]) == ({}, True)
+    assert _pending_tool_calls([call, HumanMessage(content="next")]) == (
         {"c1": "search_docs"},
         False,
     )
@@ -652,7 +659,7 @@ class ChunkGraph:
 async def test_chat_events_stops_when_client_disconnects():
     events = [
         event
-        async for event in api._chat_events(
+        async for event in _chat_events(
             ChunkGraph(),
             {"messages": []},
             {"configurable": {"thread_id": "user_alice:s1"}},
@@ -739,7 +746,7 @@ def test_tool_events_redact_pii():
             }
         ],
     )
-    events = api._tool_events(message)
+    events = _tool_events(message)
     payload = json.dumps(events, ensure_ascii=False)
     assert "alice@example.com" not in payload
     assert "[EMAIL]" in payload
@@ -747,14 +754,14 @@ def test_tool_events_redact_pii():
 
 async def test_maybe_extract_memory_runs_for_candidate(monkeypatch):
     calls = []
-    monkeypatch.setattr(api, "ENABLE_AUTO_MEMORY", True)
+    monkeypatch.setattr(api_services, "ENABLE_AUTO_MEMORY", True)
     monkeypatch.setattr(
-        api, "maybe_extract_and_save", lambda *args: calls.append(args)
+        api_services, "maybe_extract_and_save", lambda *args: calls.append(args)
     )
     services = fake_services()
     services.model = object()
     services.memory_store = object()
-    await api._maybe_extract_memory(
+    await _maybe_extract_memory(
         services,
         UserContext(user_id="user_alice"),
         "请记住我叫小明",
@@ -766,14 +773,14 @@ async def test_maybe_extract_memory_runs_for_candidate(monkeypatch):
 
 async def test_maybe_extract_memory_skips_non_candidate(monkeypatch):
     calls = []
-    monkeypatch.setattr(api, "ENABLE_AUTO_MEMORY", True)
+    monkeypatch.setattr(api_services, "ENABLE_AUTO_MEMORY", True)
     monkeypatch.setattr(
-        api, "maybe_extract_and_save", lambda *args: calls.append(args)
+        api_services, "maybe_extract_and_save", lambda *args: calls.append(args)
     )
     services = fake_services()
     services.model = object()
     services.memory_store = object()
-    await api._maybe_extract_memory(
+    await _maybe_extract_memory(
         services,
         UserContext(user_id="user_alice"),
         "checkpointer 是什么",
@@ -784,9 +791,9 @@ async def test_maybe_extract_memory_skips_non_candidate(monkeypatch):
 
 async def test_maybe_extract_memory_skips_after_save_memory(monkeypatch):
     calls = []
-    monkeypatch.setattr(api, "ENABLE_AUTO_MEMORY", True)
+    monkeypatch.setattr(api_services, "ENABLE_AUTO_MEMORY", True)
     monkeypatch.setattr(
-        api, "maybe_extract_and_save", lambda *args: calls.append(args)
+        api_services, "maybe_extract_and_save", lambda *args: calls.append(args)
     )
     services = fake_services()
     services.model = object()
@@ -801,7 +808,7 @@ async def test_maybe_extract_memory_skips_after_save_memory(monkeypatch):
             }
         ],
     )
-    await api._maybe_extract_memory(
+    await _maybe_extract_memory(
         services,
         UserContext(user_id="user_alice"),
         "请记住我叫小明",
@@ -812,9 +819,9 @@ async def test_maybe_extract_memory_skips_after_save_memory(monkeypatch):
 
 async def test_post_turn_memory_reads_state(monkeypatch):
     calls = []
-    monkeypatch.setattr(api, "ENABLE_AUTO_MEMORY", True)
+    monkeypatch.setattr(api_services, "ENABLE_AUTO_MEMORY", True)
     monkeypatch.setattr(
-        api, "maybe_extract_and_save", lambda *args: calls.append(args)
+        api_services, "maybe_extract_and_save", lambda *args: calls.append(args)
     )
     services = fake_services()
     services.model = object()
@@ -826,7 +833,7 @@ async def test_post_turn_memory_reads_state(monkeypatch):
                 values={"messages": [HumanMessage(content="hi")]}
             )
 
-    await api._post_turn_memory(
+    await _post_turn_memory(
         StateGraph(),
         {},
         services,
@@ -838,9 +845,9 @@ async def test_post_turn_memory_reads_state(monkeypatch):
 
 def test_chat_triggers_candidate_extraction(monkeypatch):
     calls = []
-    monkeypatch.setattr(api, "ENABLE_AUTO_MEMORY", True)
+    monkeypatch.setattr(api_services, "ENABLE_AUTO_MEMORY", True)
     monkeypatch.setattr(
-        api, "maybe_extract_and_save", lambda *args: calls.append(args)
+        api_services, "maybe_extract_and_save", lambda *args: calls.append(args)
     )
     services = fake_services()
     services.model = object()

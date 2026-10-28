@@ -6,8 +6,8 @@ import operator
 from langchain_core.tools import BaseTool, tool
 from langgraph.types import interrupt
 
-from rag import format_docs
-from tracing import span
+from agentlab.observability.tracing import span
+from agentlab.rag.loaders import format_docs
 
 _OPS = {
     ast.Add: operator.add,

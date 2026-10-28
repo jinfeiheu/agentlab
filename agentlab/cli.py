@@ -14,9 +14,9 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.store.memory import InMemoryStore
 from langgraph.types import Command
 
-from auth import DEMO_USERS, UserContext
-from context import compress_tool_content
-from config import (
+from agentlab.security.auth import DEMO_USERS, UserContext
+from agentlab.agent.context import compress_tool_content
+from agentlab.config import (
     DOCS_DIR,
     EMBED_DIMS,
     ENABLE_AUTO_MEMORY,
@@ -26,22 +26,22 @@ from config import (
     RERANK_ENABLED,
     RERANK_MODEL,
 )
-from graph import SYSTEM_PROMPT, build_graph, build_simple_graph
-from memory import (
+from agentlab.agent.graph import SYSTEM_PROMPT, build_graph, build_simple_graph
+from agentlab.agent.memory import (
     maybe_extract_and_save,
     messages_used_save_memory,
     save_memory,
     search_memory,
     summarize_and_save,
 )
-from models import build_chat_model, build_embeddings
-from multi_agent import build_multi_agent_graph
-from rag import build_inmemory_retriever
-from retrieval import build_pgvector_hybrid_retriever, build_reranker
-from security import StreamingRedactor, check_input, redact_pii
-from tickets import get_ticket
-from tools import calculator, make_search_tool, send_report
-from tracing import setup_tracing, shutdown_tracing
+from agentlab.models import build_chat_model, build_embeddings
+from agentlab.agent.multi_agent import build_multi_agent_graph
+from agentlab.rag.loaders import build_inmemory_retriever
+from agentlab.rag.retrieval import build_pgvector_hybrid_retriever, build_reranker
+from agentlab.security.guard import StreamingRedactor, check_input, redact_pii
+from agentlab.tools.tickets import get_ticket
+from agentlab.tools.builtin import calculator, make_search_tool, send_report
+from agentlab.observability.tracing import setup_tracing, shutdown_tracing
 
 HELP = """命令:
   /new    开启新会话(清空多轮记忆)

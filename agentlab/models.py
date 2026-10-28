@@ -4,7 +4,7 @@ from langchain_core.runnables import Runnable
 from langchain_deepseek import ChatDeepSeek
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 
-from config import DEEPSEEK_MODEL, EMBED_MODEL, OLLAMA_BASE_URL
+from agentlab.config import DEEPSEEK_MODEL, EMBED_MODEL, OLLAMA_BASE_URL
 
 
 def build_chat_model(*, temperature: float = 0) -> ChatDeepSeek:

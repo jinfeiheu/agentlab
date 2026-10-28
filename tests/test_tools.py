@@ -5,7 +5,7 @@ from pathlib import Path
 
 from langchain_core.documents import Document
 
-from tools import calculator, make_search_tool
+from agentlab.tools.builtin import calculator, make_search_tool
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _SUBPROCESS_ENV = {
@@ -42,7 +42,7 @@ def test_calculator_rejects_nested_huge_power():
     code = """
 import resource
 resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024, 512 * 1024 * 1024))
-from tools import calculator
+from agentlab.tools.builtin import calculator
 print(calculator.invoke({"expression": "((9**999)**999)**999"}))
 """
     result = subprocess.run(
@@ -106,7 +106,7 @@ def test_search_tool_emits_retrieve_and_rerank_spans():
         InMemorySpanExporter,
     )
 
-    from tracing import setup_tracing
+    from agentlab.observability.tracing import setup_tracing
 
     exporter = InMemorySpanExporter()
     setup_tracing(exporter=exporter)

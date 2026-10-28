@@ -7,16 +7,16 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = BASE_DIR / "data"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DATA_DIR = PROJECT_ROOT / "data"
 DOCS_DIR = DATA_DIR / "docs"
-GOLDEN_PATH = BASE_DIR / "eval" / "golden.jsonl"
+GOLDEN_PATH = PROJECT_ROOT / "eval" / "golden.jsonl"
 # hard 评测与 easy 集完全隔离:独立语料、golden 和 pgvector collection。
 HARD_DOCS_DIR = Path(
     os.getenv("HARD_DOCS_DIR", str(DATA_DIR / "docs_hard"))
 )
 HARD_GOLDEN_PATH = Path(
-    os.getenv("HARD_GOLDEN_PATH", str(BASE_DIR / "eval" / "golden_hard.jsonl"))
+    os.getenv("HARD_GOLDEN_PATH", str(PROJECT_ROOT / "eval" / "golden_hard.jsonl"))
 )
 
 

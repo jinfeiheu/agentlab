@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from mcp_client import MCP_SERVER_CONFIG, load_mcp_tools
+from agentlab.mcp.client import MCP_SERVER_CONFIG, load_mcp_tools
 
 integration = pytest.mark.skipif(
     os.getenv("RUN_INTEGRATION") != "1",
@@ -18,8 +18,12 @@ def test_mcp_server_config_uses_stdio():
         assert config["transport"] == "stdio"
         assert config["command"]
         assert config["cwd"]
-    assert "mcp_server.py" in " ".join(MCP_SERVER_CONFIG["agentlab"]["args"])
-    assert "mcp_utils_server.py" in " ".join(MCP_SERVER_CONFIG["utils"]["args"])
+    assert "agentlab.mcp.knowledge_server" in " ".join(
+        MCP_SERVER_CONFIG["agentlab"]["args"]
+    )
+    assert "agentlab.mcp.utils_server" in " ".join(
+        MCP_SERVER_CONFIG["utils"]["args"]
+    )
 
 
 @pytest.mark.integration

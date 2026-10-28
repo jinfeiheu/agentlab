@@ -13,8 +13,8 @@ from opentelemetry.sdk.trace.export import (
     SpanExporter,
 )
 
-from config import PHOENIX_ENDPOINT, TRACING_ENABLED
-from security import redact_pii
+from agentlab.config import PHOENIX_ENDPOINT, TRACING_ENABLED
+from agentlab.security.guard import redact_pii
 
 _provider: TracerProvider | None = None
 _instrumentor: LangChainInstrumentor | None = None

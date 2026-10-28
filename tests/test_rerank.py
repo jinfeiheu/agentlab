@@ -2,7 +2,7 @@
 
 from langchain_core.documents import Document
 
-from retrieval import (
+from agentlab.rag.retrieval import (
     ChainReranker,
     CrossEncoderReranker,
     LLMReranker,

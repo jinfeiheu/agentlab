@@ -4,8 +4,8 @@ from langchain_core.runnables import Runnable
 from langchain_ollama import ChatOllama
 from pydantic import BaseModel, Field
 
-from config import DEEPSEEK_MODEL, EVAL_JUDGE_MODEL, OLLAMA_BASE_URL
-from models import build_judge_model
+from agentlab.config import DEEPSEEK_MODEL, EVAL_JUDGE_MODEL, OLLAMA_BASE_URL
+from agentlab.models import build_judge_model
 
 
 class JudgeResult(BaseModel):
