@@ -18,6 +18,8 @@ dependencies = [
   "pyjwt>=2.10,<3",
   "python-dotenv>=1.2",
   "tiktoken>=0.14",
+  "sqlglot>=30.27.0",
+  "faker>=40.44.0",
 ]
 
 [project.scripts]

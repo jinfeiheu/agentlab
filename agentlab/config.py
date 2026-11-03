@@ -65,3 +65,21 @@ ENABLE_AUTO_MEMORY = _env_bool("ENABLE_AUTO_MEMORY", False)
 MEMORY_EPISODE_TTL_DAYS = float(os.getenv("MEMORY_EPISODE_TTL_DAYS", "30"))
 # 评测裁判模型:默认 DeepSeek;可设为本地 Ollama 模型做跨模型对照。
 EVAL_JUDGE_MODEL = os.getenv("EVAL_JUDGE_MODEL", DEEPSEEK_MODEL)
+
+# 数据分析 Agent:只读连接、查询限制与租户默认值。
+ANALYTICS_DATABASE_URL = os.getenv(
+    "ANALYTICS_DATABASE_URL",
+    "postgresql://analytics_reader:analytics_reader@localhost:5432/agentlab",
+)
+# seed 需要写权限；只读角色不能用来建表/灌数据。
+ANALYTICS_SEED_DATABASE_URL = os.getenv(
+    "ANALYTICS_SEED_DATABASE_URL", DATABASE_URL
+)
+ANALYTICS_MAX_ROWS = int(os.getenv("ANALYTICS_MAX_ROWS", "200"))
+ANALYTICS_STATEMENT_TIMEOUT = int(
+    os.getenv("ANALYTICS_STATEMENT_TIMEOUT", "5000")
+)
+ANALYTICS_COST_THRESHOLD = float(
+    os.getenv("ANALYTICS_COST_THRESHOLD", "100000")
+)
+ANALYTICS_TENANT_ID = os.getenv("ANALYTICS_TENANT_ID", "tenant_a")

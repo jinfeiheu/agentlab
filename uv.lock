@@ -557,6 +557,18 @@ wheels = [
 ]
 
 [[package]]
+name = "faker"
+version = "40.44.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "tzdata", marker = "sys_platform == 'win32'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/87/22/965c7b822f4c80f6e003c696d5fa01b48eea6cc7852d61aec8779519b346/faker-40.44.0.tar.gz", hash = "sha256:97245a3756dcaf35418b89bea9f03ae6881557db0032bf048744c2aaee2a9108", size = 2034259, upload-time = "2026-10-28T17:06:41.048Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/58/9e/3da962809aefa00ddf457d1b11bba41d7766373a0ad9e537fa0804604361/faker-40.44.0-py3-none-any.whl", hash = "sha256:db808a3ec33fe9ce5caf40b9fb61f85f46e429a56966f765209272adec83e4c6", size = 2069747, upload-time = "2026-10-28T17:06:39.109Z" },
+]
+
+[[package]]
 name = "fastapi"
 version = "0.156.4"
 source = { registry = "https://pypi.org/simple" }
@@ -1290,6 +1302,7 @@ name = "langchain-graph-demo"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "faker" },
     { name = "langchain" },
     { name = "langchain-core" },
     { name = "langchain-deepseek" },
@@ -1301,6 +1314,7 @@ dependencies = [
     { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "pyjwt" },
     { name = "python-dotenv" },
+    { name = "sqlglot" },
     { name = "tiktoken" },
 ]
 
@@ -1337,6 +1351,7 @@ serve = [
 
 [package.metadata]
 requires-dist = [
+    { name = "faker", specifier = ">=40.44.0" },
     { name = "langchain", specifier = ">=1.4,<2" },
     { name = "langchain-core", specifier = ">=1.6,<2" },
     { name = "langchain-deepseek", specifier = ">=1.1,<2" },
@@ -1346,6 +1361,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.26" },
     { name = "pyjwt", specifier = ">=2.10,<3" },
     { name = "python-dotenv", specifier = ">=1.2" },
+    { name = "sqlglot", specifier = ">=30.27.0" },
     { name = "tiktoken", specifier = ">=0.14" },
 ]
 
@@ -4016,6 +4032,15 @@ wheels = [
 [package.optional-dependencies]
 asyncio = [
     { name = "greenlet" },
+]
+
+[[package]]
+name = "sqlglot"
+version = "30.27.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/5b/d8/322dee46e3fd283a3b249a22e4f369693f9aad9fdc714df66b815882e99e/sqlglot-30.27.0.tar.gz", hash = "sha256:10617b2beee196e88a310c6a5348482248bf10ac01c6ade22128bf4a690ec0ee", size = 6172431, upload-time = "2026-10-30T18:18:59.13Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8f/88/fb7ce53c23e171ad059fd3a5ff6889399da2804cf0cfda2a10c64f32fdf7/sqlglot-30.27.0-py3-none-any.whl", hash = "sha256:b630686fc167762e20960ad3d007ad03d81af0a804c9f7d117f1fe06433c839e", size = 801972, upload-time = "2026-10-30T18:18:57.65Z" },
 ]
 
 [[package]]
