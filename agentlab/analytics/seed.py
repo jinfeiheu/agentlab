@@ -9,6 +9,7 @@ from typing import Iterable, Iterator, Sequence
 import psycopg
 from faker import Faker
 
+from agentlab.analytics.catalog import METRICS
 from agentlab.config import ANALYTICS_SEED_DATABASE_URL
 
 TENANTS = ("tenant_a", "tenant_b", "tenant_c")
@@ -44,45 +45,6 @@ BASE_COUNTS = {
     "usage_events": 500_000,
     "tickets": 20_000,
 }
-
-METRICS = (
-    (
-        "revenue",
-        "已完成订单的净收入",
-        "SUM(oi.quantity * oi.unit_price * (1 - oi.discount))",
-    ),
-    (
-        "gmv",
-        "所有订单的商品总额",
-        "SUM(oi.quantity * oi.unit_price * (1 - oi.discount))",
-    ),
-    (
-        "net_revenue",
-        "GMV 减去退款金额",
-        "SUM(oi.quantity * oi.unit_price * (1 - oi.discount))"
-        " - COALESCE(SUM(r.amount), 0)",
-    ),
-    (
-        "refund_rate",
-        "退款金额 / GMV",
-        "COALESCE(SUM(r.amount), 0)"
-        " / NULLIF(SUM(oi.quantity * oi.unit_price * (1 - oi.discount)), 0)",
-    ),
-    ("active_customers", "近 30 天有订单的客户数", "COUNT(DISTINCT o.customer_id)"),
-    ("order_count", "订单数", "COUNT(DISTINCT o.order_id)"),
-    (
-        "aov",
-        "客单价",
-        "SUM(oi.quantity * oi.unit_price * (1 - oi.discount))"
-        " / NULLIF(COUNT(DISTINCT o.order_id), 0)",
-    ),
-    (
-        "arpu",
-        "每用户平均收入",
-        "SUM(oi.quantity * oi.unit_price * (1 - oi.discount))"
-        " / NULLIF(COUNT(DISTINCT o.customer_id), 0)",
-    ),
-)
 
 _DDL = (
     "CREATE SCHEMA IF NOT EXISTS analytics",

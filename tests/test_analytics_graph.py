@@ -1,0 +1,134 @@
+"""Analytics Graph 的离线测试：用脚本模型和 Fake DB 验证主流程。"""
+
+from agentlab.analytics.db import AnalyticsDBError, QueryResult
+from agentlab.analytics.graph import (
+    AnswerOutput,
+    Intent,
+    SQLPlan,
+    build_analytics_graph,
+    run_analytics_question,
+)
+
+
+class ScriptedAnalyticsModel:
+    """按调用顺序返回结构化结果，模拟 understand/plan/repair/answer。"""
+
+    def __init__(self, results):
+        self.results = list(results)
+        self.calls = 0
+
+    def with_structured_output(self, schema, **kwargs):
+        return self
+
+    async def ainvoke(self, prompt, **kwargs):
+        result = self.results[self.calls]
+        self.calls += 1
+        return result
+
+
+class FakeAnalyticsDB:
+    """返回预设结果或异常，并记录实际执行的 SQL。"""
+
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.queries = []
+
+    async def execute(
+        self, sql_text, tenant_id, max_rows=200, timeout_ms=5000
+    ):
+        self.queries.append((sql_text, tenant_id))
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+
+def _query_result() -> QueryResult:
+    return QueryResult(
+        columns=["revenue"],
+        rows=[(100,)],
+        row_count=1,
+        truncated=False,
+        duration_ms=1.0,
+    )
+
+
+async def test_graph_answers_normal_question():
+    model = ScriptedAnalyticsModel(
+        [
+            Intent(intent="answer", metrics=["revenue"], time_range="上个月"),
+            SQLPlan(
+                sql="SELECT SUM(oi.quantity * oi.unit_price) AS revenue "
+                "FROM order_items oi"
+            ),
+            AnswerOutput(answer="上月收入为 100 元。"),
+        ]
+    )
+    db = FakeAnalyticsDB([_query_result()])
+    graph = build_analytics_graph(model, db)
+
+    result = await run_analytics_question(graph, "上个月收入", "tenant_a")
+
+    assert "100" in result["answer"]
+    assert result["sql"]
+    assert result["result"]["row_count"] == 1
+    assert len(db.queries) == 1
+    assert db.queries[0][1] == "tenant_a"
+
+
+async def test_graph_clarifies_ambiguous_question():
+    model = ScriptedAnalyticsModel(
+        [
+            Intent(
+                intent="clarify",
+                ambiguous=True,
+                clarification="请明确时间范围和收入口径。",
+            )
+        ]
+    )
+    db = FakeAnalyticsDB([])
+    graph = build_analytics_graph(model, db)
+
+    result = await run_analytics_question(graph, "最近收入怎么样", "tenant_a")
+
+    assert result["clarification"]
+    assert "时间范围" in result["clarification"]
+    assert db.queries == []
+
+
+async def test_graph_refuses_unanswerable_question():
+    model = ScriptedAnalyticsModel(
+        [Intent(intent="refuse", metrics=["nps"])]
+    )
+    db = FakeAnalyticsDB([])
+    graph = build_analytics_graph(model, db)
+
+    result = await run_analytics_question(graph, "NPS 是多少", "tenant_a")
+
+    assert "无法" in result["answer"]
+    assert db.queries == []
+
+
+async def test_graph_repairs_sql_once():
+    model = ScriptedAnalyticsModel(
+        [
+            Intent(intent="answer", metrics=["revenue"]),
+            SQLPlan(sql="SELECT * FROM orders"),
+            SQLPlan(sql="SELECT * FROM orders LIMIT 10"),
+            AnswerOutput(answer="修复后查询成功，共 1 行。"),
+        ]
+    )
+    db = FakeAnalyticsDB(
+        [
+            AnalyticsDBError("column does not exist"),
+            _query_result(),
+        ]
+    )
+    graph = build_analytics_graph(model, db)
+
+    result = await run_analytics_question(graph, "查询订单", "tenant_a")
+
+    assert result["repair_count"] == 1
+    assert len(db.queries) == 2
+    assert "LIMIT 10" in result["sql"]
+    assert "成功" in result["answer"]

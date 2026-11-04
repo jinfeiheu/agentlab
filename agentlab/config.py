@@ -11,6 +11,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_ROOT / "data"
 DOCS_DIR = DATA_DIR / "docs"
 GOLDEN_PATH = PROJECT_ROOT / "eval" / "golden.jsonl"
+ANALYTICS_GOLDEN_PATH = PROJECT_ROOT / "eval" / "analytics_golden.jsonl"
 # hard 评测与 easy 集完全隔离:独立语料、golden 和 pgvector collection。
 HARD_DOCS_DIR = Path(
     os.getenv("HARD_DOCS_DIR", str(DATA_DIR / "docs_hard"))
