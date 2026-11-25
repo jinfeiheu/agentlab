@@ -104,3 +104,8 @@ ANALYTICS_REQUEST_BUDGET = float(
 ANALYTICS_MODEL_CALL_COST = float(
     os.getenv("ANALYTICS_MODEL_CALL_COST", "0.002")
 )
+
+# 多轮分析会话：上下文最大字符数与保留轮数。
+ANALYTICS_SESSION_MAX_CHARS = int(
+    os.getenv("ANALYTICS_SESSION_MAX_CHARS", "2000")
+)

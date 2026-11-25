@@ -1,0 +1,187 @@
+"""Analytics API 的服务集合与 SSE 计划事件。"""
+
+import asyncio
+import time
+from dataclasses import dataclass
+
+from agentlab.analytics.audit import write_audit
+from agentlab.analytics.db import AnalyticsDB
+from agentlab.analytics.graph import (
+    _audit_status,
+    _summarize,
+    build_analytics_graph,
+)
+from agentlab.analytics.session import AnalyticsSessionStore
+from agentlab.analytics.versioning import build_model_router
+from agentlab.api.sse import sse
+from agentlab.models import build_chat_model
+from agentlab.security.guard import redact_pii
+
+DEFAULT_STEPS = [
+    "understand",
+    "plan_sql",
+    "validate_sql",
+    "estimate_cost",
+    "approve",
+    "execute",
+    "answer",
+]
+
+
+@dataclass
+class AnalyticsServices:
+    """Analytics 图与会话表；测试可注入 fake。"""
+
+    graph: object
+    sessions: AnalyticsSessionStore
+    db_check: object = None
+
+    async def aclose(self) -> None:
+        return None
+
+
+def build_analytics_services() -> AnalyticsServices:
+    """生产依赖：单 Agent 图 + 进程内会话。"""
+    model = build_chat_model(temperature=0)
+    graph = build_analytics_graph(
+        model,
+        AnalyticsDB(),
+        model_router=build_model_router(temperature=0),
+    )
+    return AnalyticsServices(
+        graph=graph,
+        sessions=AnalyticsSessionStore(),
+    )
+
+
+def _redact_value(value):
+    if isinstance(value, str):
+        return redact_pii(value)
+    if isinstance(value, dict):
+        return {key: _redact_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_redact_value(item) for item in value]
+    return value
+
+
+def _step_summary(node: str, data: dict) -> dict:
+    summary: dict = {}
+    if "sql" in data:
+        summary["sql_chars"] = len(str(data.get("sql") or ""))
+    if "sql_error" in data:
+        summary["error"] = redact_pii(str(data.get("sql_error") or ""))
+    if "estimated_cost" in data:
+        summary["estimated_cost"] = data.get("estimated_cost")
+    if "repair_count" in data:
+        summary["repair_count"] = data.get("repair_count")
+    result = data.get("result") or {}
+    if result:
+        summary["row_count"] = result.get("row_count", 0)
+    return summary
+
+
+async def analytics_events(
+    graph,
+    payload: dict,
+    config: dict,
+    sessions: AnalyticsSessionStore,
+    user_id: str,
+    session_id: str,
+    request=None,
+):
+    """把图更新映射成 plan_created/step_*/verification/replan/final 事件。"""
+    request_id = str(payload.get("request_id") or "")
+    state = dict(payload)
+    started = time.perf_counter()
+    yield sse(
+        {
+            "type": "plan_created",
+            "steps": DEFAULT_STEPS,
+            "audit_id": request_id,
+        }
+    )
+    try:
+        astream = getattr(graph, "astream", None)
+        if astream is None:
+            state.update(await graph.ainvoke(payload, config=config))
+        else:
+            async for update in graph.astream(
+                payload, config=config, stream_mode="updates"
+            ):
+                if request is not None and await request.is_disconnected():
+                    return
+                for node, data in (update or {}).items():
+                    if not isinstance(data, dict):
+                        continue
+                    state.update(data)
+                    yield sse({"type": "step_started", "step": node})
+                    yield sse(
+                        {
+                            "type": "step_result",
+                            "step": node,
+                            **_step_summary(node, data),
+                        }
+                    )
+                    if node == "validate_sql":
+                        yield sse(
+                            {
+                                "type": "verification",
+                                "ok": not data.get("sql_error"),
+                                "reason": redact_pii(
+                                    str(data.get("sql_error") or "")
+                                ),
+                            }
+                        )
+                    if node == "repair":
+                        yield sse(
+                            {
+                                "type": "replan",
+                                "repair_count": data.get(
+                                    "repair_count", 0
+                                ),
+                            }
+                        )
+    except asyncio.CancelledError:
+        yield sse({"type": "error", "message": "cancelled"})
+        return
+    except Exception as exc:  # noqa: BLE001 - 流内错误统一事件
+        yield sse({"type": "error", "message": redact_pii(str(exc))})
+        return
+
+    duration_ms = (time.perf_counter() - started) * 1000
+    result = state.get("result") or {}
+    status = _audit_status(state)
+    await write_audit(
+        request_id=request_id,
+        user_id=user_id,
+        tenant_id=str(payload.get("tenant_id") or ""),
+        question=str(payload.get("question") or ""),
+        sql=str(state.get("sql") or ""),
+        status=status,
+        row_count=result.get("row_count", 0),
+        estimated_cost=float(state.get("estimated_cost", 0.0) or 0.0),
+        duration_ms=duration_ms,
+        prompt_version=_summarize(state.get("prompt_versions")),
+        model_id=_summarize(state.get("model_ids")),
+    )
+    sessions.record(
+        user_id,
+        session_id,
+        str(payload.get("question") or ""),
+        state,
+    )
+    yield sse(
+        {
+            "type": "final",
+            "answer": redact_pii(str(state.get("answer") or "")),
+            "sql": redact_pii(str(state.get("sql") or "")),
+            "columns": result.get("columns") or [],
+            "rows": _redact_value(result.get("rows") or []),
+            "chart_spec": _redact_value(state.get("chart_spec")),
+            "audit_id": request_id,
+            "clarification": redact_pii(
+                str(state.get("clarification") or "")
+            ),
+            "status": status,
+        }
+    )

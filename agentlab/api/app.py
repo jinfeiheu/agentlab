@@ -4,6 +4,7 @@ import asyncio
 import inspect
 import logging
 import time
+import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -12,9 +13,26 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from langgraph.types import Command
 
-from agentlab.security.auth import UserContext, login as authenticate, verify_token
+from agentlab.security.auth import (
+    UserContext,
+    login as authenticate,
+    tenant_for_user,
+    verify_token,
+)
 from agentlab.config import RATE_LIMIT_PER_MINUTE, REQUEST_TIMEOUT
+from agentlab.api.analytics import (
+    AnalyticsServices,
+    _redact_value,
+    analytics_events,
+    build_analytics_services,
+)
+from agentlab.analytics.executor import cancel_task
+from agentlab.analytics.graph import _audit_status, run_analytics_question
 from agentlab.api.schemas import (
+    AnalyticsCancelRequest,
+    AnalyticsCancelResponse,
+    AnalyticsChatRequest,
+    AnalyticsChatResponse,
     ChatRequest,
     ChatResponse,
     LoginRequest,
@@ -79,7 +97,9 @@ def get_current_user(
         user_id = verify_token(token)
     except ValueError as exc:
         raise HTTPException(status_code=401, detail="invalid token") from exc
-    return UserContext(user_id=user_id)
+    return UserContext(
+        user_id=user_id, tenant_id=tenant_for_user(user_id)
+    )
 
 
 def get_services(request: Request) -> Services:
@@ -93,6 +113,14 @@ def get_services(request: Request) -> Services:
     return services
 
 
+def get_analytics_services(request: Request) -> AnalyticsServices:
+    """从 app.state 取 Analytics 服务；未初始化时 503。"""
+    services = request.app.state.analytics
+    if services is None:
+        raise HTTPException(status_code=503, detail="analytics 未就绪")
+    return services
+
+
 def get_thread_lock(app: FastAPI, thread_id: str) -> asyncio.Lock:
     """同一 thread 的请求串行执行,避免 checkpoint 状态交错。"""
     locks = app.state.thread_locks
@@ -103,8 +131,27 @@ def get_thread_lock(app: FastAPI, thread_id: str) -> asyncio.Lock:
     return lock
 
 
-def create_app(services: Services | None = None) -> FastAPI:
-    """创建 FastAPI 应用;传入 services 时跳过真实依赖构建。"""
+def _analytics_response(state: dict) -> AnalyticsChatResponse:
+    result = state.get("result") or {}
+    return AnalyticsChatResponse(
+        answer=redact_pii(str(state.get("answer") or "")),
+        sql=redact_pii(str(state.get("sql") or "")),
+        columns=result.get("columns") or [],
+        rows=_redact_value(result.get("rows") or []),
+        chart_spec=_redact_value(state.get("chart_spec")),
+        audit_id=str(state.get("request_id") or ""),
+        clarification=redact_pii(
+            str(state.get("clarification") or "")
+        ),
+        status=_audit_status(state),
+    )
+
+
+def create_app(
+    services: Services | None = None,
+    analytics: AnalyticsServices | None = None,
+) -> FastAPI:
+    """创建 FastAPI 应用;传入 services/analytics 时跳过真实依赖构建。"""
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -120,20 +167,33 @@ def create_app(services: Services | None = None) -> FastAPI:
                     app.state.startup_error = (
                         f"服务初始化失败: {redact_pii(str(exc))}"
                     )
+            if app.state.analytics is None:
+                try:
+                    app.state.analytics = build_analytics_services()
+                except Exception as exc:  # noqa: BLE001 - Analytics 可独立降级
+                    logger.error(
+                        "Analytics 初始化失败: %s", redact_pii(str(exc))
+                    )
             yield
         finally:
             current = app.state.services
             aclose = getattr(current, "aclose", None)
             if aclose is not None:
                 await aclose()
+            analytics_current = app.state.analytics
+            analytics_close = getattr(analytics_current, "aclose", None)
+            if analytics_close is not None:
+                await analytics_close()
             if tracing_started:
                 shutdown_tracing()
 
     app = FastAPI(title="Agent Interview Lab", lifespan=lifespan)
     app.state.services = services
+    app.state.analytics = analytics
     app.state.startup_error = None
     app.state.limiter = RateLimiter(RATE_LIMIT_PER_MINUTE)
     app.state.thread_locks: dict[str, asyncio.Lock] = {}
+    app.state.analytics_tasks: dict[str, dict] = {}
 
     @app.post("/login", response_model=LoginResponse)
     def login_endpoint(body: LoginRequest) -> LoginResponse:
@@ -355,6 +415,156 @@ def create_app(services: Services | None = None) -> FastAPI:
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
+
+    @app.get("/analytics", include_in_schema=False)
+    def analytics_page() -> FileResponse:
+        return FileResponse(STATIC_DIR / "analytics.html")
+
+    @app.post("/analytics/chat", response_model=AnalyticsChatResponse)
+    async def analytics_chat(
+        body: AnalyticsChatRequest,
+        user: UserContext = Depends(get_current_user),
+        svc: AnalyticsServices = Depends(get_analytics_services),
+    ) -> AnalyticsChatResponse:
+        if not app.state.limiter.allow(user.user_id):
+            raise HTTPException(status_code=429, detail="rate limit exceeded")
+        if body.tenant_id and body.tenant_id != user.tenant_id:
+            raise HTTPException(status_code=403, detail="tenant mismatch")
+        decision = check_input(body.message)
+        if not decision.allowed:
+            return AnalyticsChatResponse(
+                answer=decision.reason, status="refused_input"
+            )
+        key = f"{user.user_id}:{body.session_id}"
+        context = svc.sessions.context(user.user_id, body.session_id)
+        task = asyncio.current_task()
+        app.state.analytics_tasks[key] = {
+            "task": task,
+            "request_id": "",
+        }
+        try:
+            state = await asyncio.wait_for(
+                run_analytics_question(
+                    svc.graph,
+                    body.message,
+                    user.tenant_id,
+                    user_id=user.user_id,
+                    conversation_context=context,
+                ),
+                timeout=REQUEST_TIMEOUT,
+            )
+        except asyncio.TimeoutError as exc:
+            raise HTTPException(
+                status_code=504, detail="request timeout"
+            ) from exc
+        except asyncio.CancelledError as exc:
+            raise HTTPException(
+                status_code=499, detail="analytics cancelled"
+            ) from exc
+        except Exception as exc:  # noqa: BLE001 - 不泄漏堆栈
+            logger.warning(
+                "analytics chat failed: %s", redact_pii(str(exc))
+            )
+            raise HTTPException(
+                status_code=500, detail="analytics failed"
+            ) from exc
+        finally:
+            entry = app.state.analytics_tasks.get(key)
+            if entry is not None and entry.get("task") is task:
+                app.state.analytics_tasks.pop(key, None)
+        svc.sessions.record(
+            user.user_id, body.session_id, body.message, state
+        )
+        return _analytics_response(state)
+
+    @app.post("/analytics/chat/stream")
+    async def analytics_chat_stream(
+        body: AnalyticsChatRequest,
+        request: Request,
+        user: UserContext = Depends(get_current_user),
+        svc: AnalyticsServices = Depends(get_analytics_services),
+    ) -> StreamingResponse:
+        if not app.state.limiter.allow(user.user_id):
+            raise HTTPException(status_code=429, detail="rate limit exceeded")
+        if body.tenant_id and body.tenant_id != user.tenant_id:
+            raise HTTPException(status_code=403, detail="tenant mismatch")
+        decision = check_input(body.message)
+        if not decision.allowed:
+            return StreamingResponse(
+                _refusal_events(decision.reason),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+        key = f"{user.user_id}:{body.session_id}"
+        context = svc.sessions.context(user.user_id, body.session_id)
+        request_id = uuid.uuid4().hex
+        payload = {
+            "question": body.message,
+            "tenant_id": user.tenant_id,
+            "request_id": request_id,
+            "user_id": user.user_id,
+            "conversation_context": context,
+            "intent": {},
+            "clarification": "",
+            "sql": "",
+            "sql_error": "",
+            "repair_count": 0,
+            "validation_failures": 0,
+            "estimated_cost": 0.0,
+            "approved": False,
+            "rejected": False,
+            "result": {},
+            "answer": "",
+            "chart_spec": None,
+        }
+
+        async def events():
+            task = asyncio.current_task()
+            app.state.analytics_tasks[key] = {
+                "task": task,
+                "request_id": request_id,
+            }
+            try:
+                async for event in analytics_events(
+                    svc.graph,
+                    payload,
+                    {},
+                    svc.sessions,
+                    user.user_id,
+                    body.session_id,
+                    request,
+                ):
+                    yield event
+            finally:
+                entry = app.state.analytics_tasks.get(key)
+                if entry is not None and entry.get("task") is task:
+                    app.state.analytics_tasks.pop(key, None)
+
+        return StreamingResponse(
+            events(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    @app.post(
+        "/analytics/cancel", response_model=AnalyticsCancelResponse
+    )
+    async def analytics_cancel(
+        body: AnalyticsCancelRequest,
+        user: UserContext = Depends(get_current_user),
+    ) -> AnalyticsCancelResponse:
+        key = f"{user.user_id}:{body.session_id}"
+        entry = app.state.analytics_tasks.get(key)
+        if entry is None or entry["task"].done():
+            return AnalyticsCancelResponse(
+                cancelled=False, status="unknown"
+            )
+        cancel_task(str(entry.get("request_id") or ""))
+        entry["task"].cancel()
+        return AnalyticsCancelResponse(cancelled=True)
 
     return app
 

@@ -28,6 +28,7 @@ agentlab = "agentlab.cli:main"
 agentlab-api = "agentlab.api.app:serve"
 agentlab-mcp-knowledge = "agentlab.mcp.knowledge_server:main"
 agentlab-mcp-utils = "agentlab.mcp.utils_server:main"
+agentlab-analytics = "agentlab.analytics.cli:main"
 
 [dependency-groups]
 dev = ["pytest>=8", "pytest-asyncio>=1.4", "httpx>=0.28"]

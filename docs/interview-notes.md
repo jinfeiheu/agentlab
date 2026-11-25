@@ -113,6 +113,8 @@
 - 成本守卫：`EXPLAIN` 成本超阈值走 `interrupt`；没有 checkpointer/thread_id 时 fail closed，直接拒绝执行，不静默返回空状态。
 - Prompt 版本放 `configs/analytics/prompts/*.yaml`，每个版本带 model id；审计和 span 都记录 `prompt_version`/`model_id`。回滚只改环境变量 `ANALYTICS_PROMPT_UNDERSTAND_VERSION=v2`，不改代码。
 - 另有请求级模型调用预算（`ANALYTICS_REQUEST_BUDGET` / `ANALYTICS_MODEL_CALL_COST`）：超预算返回可读答案、审计 status=budget，不把预算问题变成 500。
+- API：`/analytics/chat` 返回 answer/sql/rows/chart_spec/audit_id；`/analytics/chat/stream` 发 `plan_created → step_* → verification/replan → final`；租户由 token 映射，请求体带其他 tenant_id 返回 403；`/analytics/cancel` 取消当前 asyncio 任务。
+- 多轮：会话按 `user_id:session_id` 隔离，追问复用上一轮 metrics/dimensions/time_range；上下文超 `ANALYTICS_SESSION_MAX_CHARS` 时丢最旧轮次，避免 prompt 无界增长。
 - 结论：多 Agent 不是默认，是数据证明后的路由选择。要让 multi 成为默认，必须在复杂子集上看到 ≥5 个百分点的提升，并覆盖它增加的延迟/成本。
 
 ## 10. 失败案例(真实调试故事)

@@ -62,6 +62,7 @@ class AnalyticsState(TypedDict, total=False):
     tenant_id: str
     request_id: str
     user_id: str
+    conversation_context: str
     intent: dict
     clarification: str
     sql: str
@@ -165,6 +166,7 @@ async def classify_question(
     tenant_id: str,
     config=None,
     prompt_registry: PromptRegistry | None = None,
+    conversation_context: str = "",
 ) -> Intent:
     """独立意图解析；auto 路由与图内 understand 共用。"""
     registry = prompt_registry or default_prompt_registry()
@@ -174,6 +176,7 @@ async def classify_question(
         metric_brief=METRIC_BRIEF,
         question=question,
         tenant_id=tenant_id,
+        conversation_context=conversation_context,
         json_intent=_JSON_INTENT,
     )
     return await run_with_timeout(
@@ -243,6 +246,9 @@ def build_analytics_graph(
                     "metric_brief": METRIC_BRIEF,
                     "question": state.get("question", ""),
                     "tenant_id": state.get("tenant_id", ""),
+                    "conversation_context": state.get(
+                        "conversation_context", ""
+                    ),
                     "json_intent": _JSON_INTENT,
                 },
                 "understand",
@@ -519,6 +525,7 @@ async def run_analytics_question(
     config=None,
     user_id: str = "anonymous",
     metrics: AnalyticsMetrics | None = None,
+    conversation_context: str = "",
 ) -> dict:
     """执行一轮问答，写审计，记录日志和过程指标。"""
     request_id = uuid.uuid4().hex
@@ -528,6 +535,7 @@ async def run_analytics_question(
         "tenant_id": tenant_id,
         "request_id": request_id,
         "user_id": user_id,
+        "conversation_context": conversation_context,
         "intent": {},
         "clarification": "",
         "sql": "",

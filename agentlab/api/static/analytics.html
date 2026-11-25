@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Analytics Agent</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0f1115; --panel: #171a21; --text: #e8eaf0; --muted: #8b93a7;
+    --accent: #5b8cff; --border: #2a2f3a; --ok: #61d095; --error: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--text); }
+  main { max-width: 920px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 0 0 10px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
+  .sub a { color: var(--accent); text-decoration: none; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 4px; }
+  input { width: 100%; padding: 9px 10px; border-radius: 8px; border: 1px solid var(--border); background: #0d0f14; color: var(--text); font-size: 14px; font-family: inherit; }
+  input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  button { padding: 9px 16px; border-radius: 8px; border: 0; background: var(--accent); color: white; font-size: 14px; cursor: pointer; }
+  button.secondary { background: #3a404d; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .row { display: flex; gap: 8px; margin-top: 12px; }
+  .row input { flex: 1; }
+  #status { font-size: 13px; color: var(--muted); margin-top: 8px; }
+  #steps { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+  .step { font-size: 12px; border: 1px solid var(--border); border-radius: 999px; padding: 4px 9px; color: var(--muted); }
+  .step.running { border-color: var(--accent); color: var(--accent); }
+  .step.done { border-color: var(--ok); color: var(--ok); }
+  .step.error { border-color: var(--error); color: var(--error); }
+  #answer { font-size: 14px; line-height: 1.6; white-space: pre-wrap; }
+  table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 13px; }
+  th, td { border-bottom: 1px solid var(--border); padding: 7px 8px; text-align: left; }
+  th { color: var(--muted); font-weight: 500; }
+  .bar-row { display: grid; grid-template-columns: 120px 1fr 90px; gap: 8px; align-items: center; font-size: 12px; margin-top: 6px; }
+  .bar-track { background: #0d0f14; border-radius: 4px; height: 12px; overflow: hidden; }
+  .bar-fill { background: var(--accent); height: 100%; }
+  pre { white-space: pre-wrap; word-break: break-word; font-size: 12px; color: var(--muted); }
+  .error { color: var(--error); }
+  @media (max-width: 640px) { .row { flex-wrap: wrap; } .row input { flex-basis: 100%; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>数据分析 Agent</h1>
+  <div class="sub"><a href="/">← 返回对话页</a> · Text-to-SQL · 只读 · 多租户</div>
+
+  <section class="panel">
+    <label>用户名 / 密码</label>
+    <div class="row">
+      <input id="user" value="alice" autocomplete="username">
+      <input id="pass" type="password" value="alice-pass" autocomplete="current-password">
+      <button onclick="login()">登录</button>
+    </div>
+    <div id="status">未登录</div>
+  </section>
+
+  <section class="panel">
+    <label>问题</label>
+    <input id="question" placeholder="例如：tenant_a 在 2026 年 9 月的 GMV 是多少？">
+    <div class="row">
+      <button id="send" onclick="send()">分析</button>
+      <button class="secondary" onclick="cancelRun()">取消</button>
+    </div>
+    <div id="steps"></div>
+  </section>
+
+  <section class="panel">
+    <h2>结果</h2>
+    <div id="answer"></div>
+    <div id="table"></div>
+    <div id="chart"></div>
+    <pre id="sql"></pre>
+    <div id="audit" class="sub"></div>
+  </section>
+</main>
+<script>
+let token = localStorage.getItem("analytics_token") || "";
+let sessionId = localStorage.getItem("analytics_session") || newSession();
+let running = false;
+
+function newSession() {
+  const id = "s-" + Math.random().toString(36).slice(2, 10);
+  localStorage.setItem("analytics_session", id);
+  return id;
+}
+function setStatus(text, kind = "") {
+  const el = document.getElementById("status");
+  el.textContent = text;
+  el.className = kind;
+}
+async function login() {
+  const res = await fetch("/login", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({
+      username: document.getElementById("user").value,
+      password: document.getElementById("pass").value,
+    }),
+  });
+  if (!res.ok) { setStatus("登录失败", "error"); return; }
+  token = (await res.json()).token;
+  localStorage.setItem("analytics_token", token);
+  setStatus("已登录 · session " + sessionId);
+}
+function addStep(name, state = "running") {
+  let el = document.getElementById("step-" + name);
+  if (!el) {
+    el = document.createElement("span");
+    el.id = "step-" + name;
+    el.className = "step";
+    document.getElementById("steps").appendChild(el);
+  }
+  el.textContent = name;
+  el.className = "step " + state;
+}
+function renderTable(columns, rows) {
+  const box = document.getElementById("table");
+  box.innerHTML = "";
+  if (!columns || !columns.length) return;
+  const table = document.createElement("table");
+  const head = table.insertRow();
+  columns.forEach(c => { const th = document.createElement("th"); th.textContent = c; head.appendChild(th); });
+  rows.forEach(row => {
+    const tr = table.insertRow();
+    row.forEach(v => { const td = tr.insertCell(); td.textContent = v === null ? "NULL" : String(v); });
+  });
+  box.appendChild(table);
+}
+function renderChart(spec) {
+  const box = document.getElementById("chart");
+  box.innerHTML = "";
+  if (!spec) return;
+  const values = spec.data && spec.data.values;
+  if (!Array.isArray(values) || !values.length) {
+    const pre = document.createElement("pre");
+    pre.textContent = JSON.stringify(spec, null, 2);
+    box.appendChild(pre);
+    return;
+  }
+  const keys = Object.keys(values[0]);
+  const labelKey = keys[0], valueKey = keys[1];
+  const max = Math.max(...values.map(v => Number(v[valueKey]) || 0), 1);
+  values.slice(0, 12).forEach(v => {
+    const row = document.createElement("div");
+    row.className = "bar-row";
+    const label = document.createElement("span"); label.textContent = v[labelKey];
+    const track = document.createElement("div"); track.className = "bar-track";
+    const fill = document.createElement("div"); fill.className = "bar-fill";
+    fill.style.width = Math.max(2, (Number(v[valueKey]) || 0) / max * 100) + "%";
+    track.appendChild(fill);
+    const value = document.createElement("span"); value.textContent = v[valueKey];
+    row.append(label, track, value);
+    box.appendChild(row);
+  });
+}
+async function send() {
+  if (running) return;
+  if (!token) { setStatus("请先登录", "error"); return; }
+  const question = document.getElementById("question").value.trim();
+  if (!question) return;
+  running = true;
+  document.getElementById("send").disabled = true;
+  document.getElementById("steps").innerHTML = "";
+  document.getElementById("answer").textContent = "";
+  document.getElementById("table").innerHTML = "";
+  document.getElementById("chart").innerHTML = "";
+  document.getElementById("sql").textContent = "";
+  setStatus("运行中…");
+  try {
+    const res = await fetch("/analytics/chat/stream", {
+      method: "POST",
+      headers: {"Content-Type": "application/json", "Authorization": "Bearer " + token},
+      body: JSON.stringify({message: question, session_id: sessionId}),
+    });
+    if (res.status === 403) { setStatus("越权：租户不匹配", "error"); return; }
+    if (!res.ok) { setStatus("请求失败: " + res.status, "error"); return; }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, {stream: true});
+      const chunks = buffer.split("\n\n");
+      buffer = chunks.pop();
+      for (const chunk of chunks) {
+        const line = chunk.split("\n").find(l => l.startsWith("data: "));
+        if (!line) continue;
+        handleEvent(JSON.parse(line.slice(6)));
+      }
+    }
+  } catch (err) {
+    setStatus("流式连接失败", "error");
+  } finally {
+    running = false;
+    document.getElementById("send").disabled = false;
+  }
+}
+function handleEvent(evt) {
+  if (evt.type === "plan_created") {
+    evt.steps.forEach(s => addStep(s, ""));
+  } else if (evt.type === "step_started") {
+    addStep(evt.step, "running");
+  } else if (evt.type === "step_result") {
+    addStep(evt.step, evt.error ? "error" : "done");
+  } else if (evt.type === "verification") {
+    setStatus(evt.ok ? "SQL 校验通过" : "SQL 校验失败: " + (evt.reason || ""));
+  } else if (evt.type === "replan") {
+    setStatus("触发重规划，第 " + evt.repair_count + " 次");
+  } else if (evt.type === "final") {
+    document.getElementById("answer").textContent = evt.answer || "";
+    renderTable(evt.columns || [], evt.rows || []);
+    renderChart(evt.chart_spec);
+    document.getElementById("sql").textContent = evt.sql || "";
+    document.getElementById("audit").textContent = "audit_id: " + (evt.audit_id || "-");
+    setStatus("完成", "ok");
+  } else if (evt.type === "error") {
+    setStatus("错误: " + evt.message, "error");
+  }
+}
+async function cancelRun() {
+  if (!token) return;
+  await fetch("/analytics/cancel", {
+    method: "POST",
+    headers: {"Content-Type": "application/json", "Authorization": "Bearer " + token},
+    body: JSON.stringify({session_id: sessionId}),
+  });
+  setStatus("已请求取消");
+}
+login();
+</script>
+</body>
+</html>

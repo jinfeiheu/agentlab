@@ -14,7 +14,10 @@ langchain-demo/
 │   ├── models.py            # 对话、嵌入、裁判、fallback 模型工厂
 │   ├── api/
 │   │   ├── app.py           # FastAPI:JWT、限流、SSE、HITL resume、健康检查
-│   │   └── static/index.html# 最小网页客户端
+│   │   ├── analytics.py     # Analytics API:会话、计划事件、取消
+│   │   └── static/
+│   │       ├── index.html   # 最小网页客户端
+│   │       └── analytics.html # 表格 + 简单图 + 计划步骤
 │   ├── agent/
 │   │   ├── graph.py         # 单 Agent 图:压缩 → agent ⇄ tools
 │   │   ├── multi_agent.py   # Supervisor 多 Agent:researcher/writer/critic
@@ -42,6 +45,8 @@ langchain-demo/
 │   │   ├── db.py            # 只读连接、租户上下文、EXPLAIN 成本
 │   │   ├── seed.py          # 合成数仓、指标口径、RLS
 │   │   ├── versioning.py    # prompt/model 版本 registry + 请求预算
+│   │   ├── session.py       # 多轮会话上下文与压缩
+│   │   ├── cli.py           # agentlab-analytics
 │   │   └── audit.py         # 审计与 PII 脱敏
 │   └── observability/
 │       ├── tracing.py       # OpenTelemetry / OpenInference → Phoenix
@@ -70,7 +75,7 @@ langchain-demo/
 │   ├── mcp-clients.md       # Claude Desktop/Code/Cursor 配置
 │   ├── results/             # 最终评测矩阵 Markdown 摘要
 │   └── archive/             # 2026-10-20 旧计划与规格
-├── tests/                   # 402 个离线测试,27 个集成测试默认跳过
+├── tests/                   # 419 个离线测试,27 个集成测试默认跳过
 ├── pyproject.toml
 ├── Dockerfile
 ├── docker-compose.yml
@@ -432,6 +437,21 @@ Analytics Agent 是独立于 RAG 主线的第二个作品：面向多租户数�
 - forced multi 的 0.98 来自一条歧义题被 Scout 误判为 answer；auto 在进入 multi 前先用同一意图解析器把 clarify/refuse 留在 single，所以 auto 仍为 1.000。
 - auto 只把 1/50 路由到 multi，成功率和 single 相同；它保留为路由实验入口，暂不设为默认。
 - multi 保留为可选深分析模式：适合需要显式 Scout/Critic 轨迹、或未来接入多步计划执行的场景。
+
+### API / CLI / 多轮会话
+
+- `agentlab-api` 提供 `/analytics` 页面、`POST /analytics/chat`、`POST /analytics/chat/stream`、`POST /analytics/cancel`。
+- 复用现有 JWT 登录；租户由 token 映射（alice→tenant_a、bob→tenant_b、carol→tenant_c），请求体若带不同 `tenant_id` 返回 403。
+- SSE 事件：`plan_created`、`step_started`、`step_result`、`verification`、`replan`、`final`；`final` 带 answer/sql/columns/rows/chart_spec/audit_id。
+- 多轮：`AnalyticsSessionStore` 按 `user_id:session_id` 隔离；追问“按地区拆一下 / 换成上季度 / 下钻到品类”会复用上一轮 metrics/dimensions/time_range。超过 `ANALYTICS_SESSION_MAX_CHARS` 时丢最旧轮次，单轮超长则截断。
+- 取消：`POST /analytics/cancel {session_id}` 取消当前 asyncio 任务；流式会收到 `error: cancelled`。
+- CLI：
+
+```bash
+uv run agentlab-analytics "tenant_a 在 2026 年 9 月的 GMV 是多少？" --tenant tenant_a
+uv run agentlab-api
+# 打开 http://localhost:8000/analytics
+```
 
 ### 复现
 

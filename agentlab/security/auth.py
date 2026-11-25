@@ -33,6 +33,19 @@ class UserContext(BaseModel):
     """当前请求的用户身份,由服务端 token 解析后注入图。"""
 
     user_id: str
+    tenant_id: str = "tenant_a"
+
+
+USER_TENANTS = {
+    "user_alice": "tenant_a",
+    "user_bob": "tenant_b",
+    "user_carol": "tenant_c",
+}
+
+
+def tenant_for_user(user_id: str) -> str:
+    """demo 用户到租户的固定映射；生产应由身份系统/数据库提供。"""
+    return USER_TENANTS.get(user_id, "tenant_a")
 
 
 def sign_token(
