@@ -3,11 +3,14 @@
 流程：理解 → 澄清/拒答 → 生成 SQL → 校验 → 执行 → 修复 → 回答。
 """
 
+import time
+import uuid
 from typing import Literal, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
 
+from agentlab.analytics.audit import write_audit
 from agentlab.analytics.catalog import (
     ALLOWED_RELATIONS,
     METRIC_BRIEF,
@@ -33,12 +36,16 @@ _JSON_ANSWER = (
     '"chart_spec": null 或 Vega-Lite 对象}'
 )
 
+_REFUSAL_MARKERS = ("无法回答", "无法查询", "不能提供", "无法提供")
+
 
 class AnalyticsState(TypedDict, total=False):
     """图的共享状态；字段按节点逐步填充。"""
 
     question: str
     tenant_id: str
+    request_id: str
+    user_id: str
     intent: dict
     clarification: str
     sql: str
@@ -302,22 +309,69 @@ def build_analytics_graph(model, db, checkpointer=None):
     return builder.compile(checkpointer=checkpointer)
 
 
+def _audit_status(state: AnalyticsState) -> str:
+    if state.get("clarification"):
+        return "clarify"
+    answer = state.get("answer") or ""
+    if any(marker in answer for marker in _REFUSAL_MARKERS):
+        return "refuse"
+    if state.get("result"):
+        return "success"
+    return "error"
+
+
 async def run_analytics_question(
-    graph, question: str, tenant_id: str, config=None
+    graph,
+    question: str,
+    tenant_id: str,
+    config=None,
+    user_id: str = "anonymous",
 ) -> dict:
-    """执行一轮问答；config 可带 thread_id 以启用 checkpoint。"""
-    return await graph.ainvoke(
-        {
-            "question": question,
-            "tenant_id": tenant_id,
-            "intent": {},
-            "clarification": "",
-            "sql": "",
-            "sql_error": "",
-            "repair_count": 0,
-            "result": {},
-            "answer": "",
-            "chart_spec": None,
-        },
-        config or {},
+    """执行一轮问答，并写一条审计记录。"""
+    request_id = uuid.uuid4().hex
+    started = time.perf_counter()
+    payload = {
+        "question": question,
+        "tenant_id": tenant_id,
+        "request_id": request_id,
+        "user_id": user_id,
+        "intent": {},
+        "clarification": "",
+        "sql": "",
+        "sql_error": "",
+        "repair_count": 0,
+        "result": {},
+        "answer": "",
+        "chart_spec": None,
+    }
+    try:
+        state = await graph.ainvoke(payload, config or {})
+    except Exception:
+        await write_audit(
+            request_id=request_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            question=question,
+            sql="",
+            status="error",
+            row_count=0,
+            estimated_cost=0.0,
+            duration_ms=(time.perf_counter() - started) * 1000,
+        )
+        raise
+
+    result = state.get("result") or {}
+    await write_audit(
+        request_id=request_id,
+        user_id=user_id,
+        tenant_id=tenant_id,
+        question=question,
+        sql=state.get("sql", ""),
+        status=_audit_status(state),
+        row_count=result.get("row_count", 0),
+        estimated_cost=0.0,
+        duration_ms=(time.perf_counter() - started) * 1000,
     )
+    state["request_id"] = request_id
+    state["user_id"] = user_id
+    return state

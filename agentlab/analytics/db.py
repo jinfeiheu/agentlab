@@ -7,6 +7,7 @@ import psycopg
 from psycopg import sql
 
 from agentlab.config import ANALYTICS_DATABASE_URL
+from agentlab.security.guard import redact_pii
 
 
 class AnalyticsDBError(RuntimeError):
@@ -68,7 +69,10 @@ class AnalyticsDB:
         except AnalyticsDBError:
             raise
         except Exception as exc:
-            raise AnalyticsDBError(f"查询执行失败：{exc}") from exc
+            # 错误信息可能回显 SQL 字面量，先做 PII 脱敏再包装。
+            raise AnalyticsDBError(
+                f"查询执行失败：{redact_pii(str(exc))}"
+            ) from exc
 
         truncated = len(rows) > max_rows
         visible_rows = rows[:max_rows]

@@ -49,6 +49,12 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA analytics
   GRANT SELECT ON TABLES TO $READER;
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
   ON ALL TABLES IN SCHEMA analytics FROM $READER;
+-- 原始 customers 含 PII：只给脱敏视图需要的列，不给 name/email/phone。
+REVOKE ALL ON analytics.customers FROM $READER;
+GRANT SELECT (customer_id, tenant_id, region, segment, created_at)
+  ON analytics.customers TO $READER;
+-- 审计表只由应用写角色访问，只读角色不暴露。
+REVOKE ALL ON analytics.analytics_audit FROM $READER;
 SQL
 
 echo "Analytics DB 就绪："

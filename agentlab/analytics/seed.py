@@ -160,7 +160,8 @@ _DDL = (
     )
     """,
     """
-    CREATE OR REPLACE VIEW analytics.customers_safe AS
+    CREATE OR REPLACE VIEW analytics.customers_safe
+    WITH (security_invoker = true) AS
     SELECT customer_id, tenant_id, region, segment, created_at
     FROM analytics.customers
     """,
@@ -183,6 +184,18 @@ TRUNCATE analytics.customers, analytics.products, analytics.orders,
          analytics.analytics_audit
 RESTART IDENTITY CASCADE
 """
+
+_RLS_TABLES = (
+    "customers",
+    "products",
+    "orders",
+    "refunds",
+    "subscriptions",
+    "usage_events",
+    "tickets",
+    "metric_catalog",
+    "analytics_audit",
+)
 
 CUSTOMER_SQL = """
 INSERT INTO analytics.customers
@@ -309,6 +322,40 @@ def _prepare_schema(conn) -> None:
     with conn.cursor() as cur:
         for statement in _DDL:
             cur.execute(statement)
+
+
+def _ensure_rls(conn) -> None:
+    """启用行级安全并重建租户隔离策略；owner 仍可 seed/写审计。"""
+    with conn.cursor() as cur:
+        for table in _RLS_TABLES:
+            cur.execute(
+                f"ALTER TABLE analytics.{table} ENABLE ROW LEVEL SECURITY"
+            )
+            cur.execute(
+                f"DROP POLICY IF EXISTS tenant_isolation "
+                f"ON analytics.{table}"
+            )
+            cur.execute(
+                f"CREATE POLICY tenant_isolation ON analytics.{table} "
+                "USING (tenant_id = "
+                "current_setting('app.tenant_id', true))"
+            )
+        cur.execute(
+            "ALTER TABLE analytics.order_items ENABLE ROW LEVEL SECURITY"
+        )
+        cur.execute(
+            "DROP POLICY IF EXISTS tenant_isolation "
+            "ON analytics.order_items"
+        )
+        cur.execute(
+            "CREATE POLICY tenant_isolation ON analytics.order_items "
+            "USING (EXISTS ("
+            "SELECT 1 FROM analytics.orders o "
+            "WHERE o.order_id = order_items.order_id "
+            "AND o.tenant_id = "
+            "current_setting('app.tenant_id', true)"
+            "))"
+        )
 
 
 def _insert_batches(
@@ -674,6 +721,7 @@ def seed_analytics(reset: bool = False, scale: float = 1.0) -> None:
             ),
         )
         _insert_batches(conn, METRIC_SQL, _metric_rows())
+        _ensure_rls(conn)
         conn.commit()
 
 
