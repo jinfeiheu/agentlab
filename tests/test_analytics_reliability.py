@@ -290,6 +290,23 @@ async def test_high_cost_requires_approval_and_can_reject():
     assert "拒绝" in state["answer"]
 
 
+async def test_high_cost_without_checkpointer_fails_closed():
+    model = _SequenceModel(
+        [
+            Intent(intent="answer"),
+            SQLPlan(sql="SELECT * FROM orders"),
+        ]
+    )
+    db = _CostDB(cost=200000)
+    graph = build_analytics_graph(model, db)
+
+    state = await graph.ainvoke(_payload("查询订单", "tenant_a"))
+
+    assert db.executed == 0
+    assert state.get("rejected") is True
+    assert "人工审批" in state["answer"]
+
+
 async def test_high_cost_can_be_approved():
     model = _SequenceModel(
         [

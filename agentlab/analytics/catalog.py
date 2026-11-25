@@ -80,7 +80,8 @@ METRICS = (
     (
         "mrr",
         "统计期内有效订阅的 MRR 合计"
-        "（start_date < 期末，且 end_date 为空或 >= 期初）",
+        "（仅按日期判断：start_date < 期末，且 end_date 为空或 >= 期初；"
+        "不要额外用 status 过滤）",
         "SUM(mrr)",
     ),
 )

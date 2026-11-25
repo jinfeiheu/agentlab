@@ -26,6 +26,8 @@ class ScriptedAnalyticsModel:
     async def ainvoke(self, prompt, **kwargs):
         result = self.results[self.calls]
         self.calls += 1
+        if isinstance(result, Exception):
+            raise result
         return result
 
 

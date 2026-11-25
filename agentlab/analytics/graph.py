@@ -8,6 +8,7 @@ import time
 import uuid
 from typing import Literal, TypedDict
 
+from langgraph.config import get_config
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 from pydantic import BaseModel, Field
@@ -61,6 +62,7 @@ class AnalyticsState(TypedDict, total=False):
     sql: str
     sql_error: str
     repair_count: int
+    validation_failures: int
     estimated_cost: float
     approved: bool
     rejected: bool
@@ -97,8 +99,11 @@ def _understand_prompt(state: AnalyticsState) -> str:
     return f"""你是企业数据分析 Agent 的意图解析器。
 判断用户问题属于以下哪种情况：
 1. 信息不足（时间范围、指标口径、维度不明确）→ intent=clarify，并在 clarification 中提出一个具体问题。
-2. 数据中不存在该指标/表 → intent=refuse。
-3. 其余情况 → intent=answer，并提取 metrics、dimensions、time_range。
+2. 数据中不存在该指标/表，且无法由现有字段计算 → intent=refuse；
+   若指标不在 catalog 但可由现有表/字段直接计算（如按 status 过滤的订单数、
+   按维度分组计数），仍 intent=answer。
+3. 问题请求其他租户的数据（与下方“租户”不一致），或索取姓名/邮箱/电话等 PII → intent=refuse。
+4. 其余情况 → intent=answer，并提取 metrics、dimensions、time_range。
 
 注意：如果问题已包含明确的时间范围（具体月份/季度/日期）和指标名
 （如订单数、GMV、销售额、客单价、退款率），直接 intent=answer，
@@ -125,7 +130,9 @@ def _sql_prompt(state: AnalyticsState) -> str:
     return f"""你是 PostgreSQL SQL 生成器。只生成一条只读 SELECT。
 硬性要求：
 - 只允许查询下面列出的表和视图，不能访问系统表。
-- 必须包含 tenant_id 过滤条件。
+- 必须包含 tenant_id 过滤条件，且值必须等于下方给定的租户；不得查询其他租户。
+- 时间范围使用左闭右开：order_date >= 期初 AND order_date < 期末（下期初）；
+  不要用 <= 月末日期，否则会漏掉月末当天的时间戳数据。
 - 不要生成 INSERT/UPDATE/DELETE/CREATE/DROP/COPY/SET 或多条语句。
 - 优先复用指标口径里的 SQL 表达式。
 - 只输出结构化结果。
@@ -270,7 +277,13 @@ def build_analytics_graph(model, db, checkpointer=None):
                 state.get("sql", ""), ALLOWED_RELATIONS
             )
             if not validation.allowed:
-                return {"sql_error": validation.reason}
+                return {
+                    "sql_error": validation.reason,
+                    "validation_failures": state.get(
+                        "validation_failures", 0
+                    )
+                    + 1,
+                }
         return {"sql": validation.normalized_sql, "sql_error": ""}
 
     async def estimate_cost(state: AnalyticsState):
@@ -293,6 +306,14 @@ def build_analytics_graph(model, db, checkpointer=None):
         with span("analytics.approve", estimated_cost=cost):
             if cost <= COST_THRESHOLD:
                 return {"approved": True, "rejected": False}
+            configurable = (get_config() or {}).get("configurable") or {}
+            if not configurable.get("thread_id"):
+                # 没有 checkpointer/thread 时 interrupt 无法恢复，必须 fail closed。
+                return {
+                    "approved": False,
+                    "rejected": True,
+                    "answer": "查询成本过高，需要人工审批后执行。",
+                }
             decision = interrupt(
                 {
                     "question": "查询预估成本较高，是否继续执行？",
@@ -436,11 +457,11 @@ def _audit_status(state: AnalyticsState) -> str:
         return "rejected"
     if state.get("clarification"):
         return "clarify"
+    if state.get("result"):
+        return "success"
     answer = state.get("answer") or ""
     if any(marker in answer for marker in _REFUSAL_MARKERS):
         return "refuse"
-    if state.get("result"):
-        return "success"
     return "error"
 
 
@@ -465,6 +486,7 @@ async def run_analytics_question(
         "sql": "",
         "sql_error": "",
         "repair_count": 0,
+        "validation_failures": 0,
         "estimated_cost": 0.0,
         "approved": False,
         "rejected": False,
