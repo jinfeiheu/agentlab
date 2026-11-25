@@ -3,11 +3,13 @@
 流程：理解 → 澄清/拒答 → 生成 SQL → 校验 → 执行 → 修复 → 回答。
 """
 
+import logging
 import time
 import uuid
 from typing import Literal, TypedDict
 
 from langgraph.graph import END, START, StateGraph
+from langgraph.types import interrupt
 from pydantic import BaseModel, Field
 
 from agentlab.analytics.audit import write_audit
@@ -17,13 +19,21 @@ from agentlab.analytics.catalog import (
     SCHEMA_BRIEF,
 )
 from agentlab.analytics.db import AnalyticsDBError
+from agentlab.analytics.reliability import run_with_timeout
 from agentlab.analytics.sql_guard import validate_sql
 from agentlab.config import (
+    ANALYTICS_COST_THRESHOLD,
     ANALYTICS_MAX_ROWS,
+    ANALYTICS_MODEL_TIMEOUT,
     ANALYTICS_STATEMENT_TIMEOUT,
 )
+from agentlab.observability.metrics import AnalyticsMetrics
+from agentlab.observability.tracing import span
 
 MAX_REPAIRS = 2
+MODEL_TIMEOUT_S = ANALYTICS_MODEL_TIMEOUT
+COST_THRESHOLD = ANALYTICS_COST_THRESHOLD
+logger = logging.getLogger(__name__)
 
 _JSON_INTENT = (
     '请只输出 JSON：{"intent": "answer|clarify|refuse", '
@@ -51,6 +61,9 @@ class AnalyticsState(TypedDict, total=False):
     sql: str
     sql_error: str
     repair_count: int
+    estimated_cost: float
+    approved: bool
+    rejected: bool
     result: dict
     answer: str
     chart_spec: dict | None
@@ -183,8 +196,18 @@ def _after_understand(state: AnalyticsState) -> str:
 
 def _after_validate(state: AnalyticsState) -> str:
     if not state.get("sql_error"):
-        return "execute"
+        return "estimate_cost"
     return "fail" if state.get("repair_count", 0) >= MAX_REPAIRS else "repair"
+
+
+def _after_estimate(state: AnalyticsState) -> str:
+    if not state.get("sql_error"):
+        return "approve"
+    return "fail" if state.get("repair_count", 0) >= MAX_REPAIRS else "repair"
+
+
+def _after_approve(state: AnalyticsState) -> str:
+    return "execute" if state.get("approved") else "reject"
 
 
 def _after_execute(state: AnalyticsState) -> str:
@@ -202,9 +225,18 @@ def build_analytics_graph(model, db, checkpointer=None):
     """构建单 Agent 基线图；模型和 DB 都可注入 fake。"""
 
     async def understand(state: AnalyticsState):
-        result = await _structured(model, Intent).ainvoke(
-            _understand_prompt(state)
-        )
+        with span(
+            "analytics.understand",
+            tenant_id=state.get("tenant_id", ""),
+            question_chars=len(state.get("question", "")),
+        ):
+            result = await run_with_timeout(
+                _structured(model, Intent).ainvoke(
+                    _understand_prompt(state)
+                ),
+                MODEL_TIMEOUT_S,
+                "understand",
+            )
         return {"intent": result.model_dump()}
 
     def clarify(state: AnalyticsState):
@@ -218,29 +250,87 @@ def build_analytics_graph(model, db, checkpointer=None):
         return {"answer": "根据现有数据无法回答该问题。", "clarification": ""}
 
     async def plan_sql(state: AnalyticsState):
-        plan = await _structured(model, SQLPlan).ainvoke(
-            _sql_prompt(state)
-        )
+        with span(
+            "analytics.plan_sql",
+            tenant_id=state.get("tenant_id", ""),
+        ):
+            plan = await run_with_timeout(
+                _structured(model, SQLPlan).ainvoke(_sql_prompt(state)),
+                MODEL_TIMEOUT_S,
+                "plan_sql",
+            )
         return {"sql": plan.sql, "sql_error": ""}
 
     def validate_sql_node(state: AnalyticsState):
-        validation = validate_sql(
-            state.get("sql", ""), ALLOWED_RELATIONS
-        )
-        if not validation.allowed:
-            return {"sql_error": validation.reason}
+        with span(
+            "analytics.validate_sql",
+            tenant_id=state.get("tenant_id", ""),
+        ):
+            validation = validate_sql(
+                state.get("sql", ""), ALLOWED_RELATIONS
+            )
+            if not validation.allowed:
+                return {"sql_error": validation.reason}
         return {"sql": validation.normalized_sql, "sql_error": ""}
 
-    async def execute(state: AnalyticsState):
-        try:
-            result = await db.execute(
-                state.get("sql", ""),
-                state.get("tenant_id", ""),
-                max_rows=ANALYTICS_MAX_ROWS,
-                timeout_ms=ANALYTICS_STATEMENT_TIMEOUT,
+    async def estimate_cost(state: AnalyticsState):
+        with span(
+            "analytics.estimate_cost",
+            tenant_id=state.get("tenant_id", ""),
+        ):
+            try:
+                cost = await db.explain(
+                    state.get("sql", ""),
+                    state.get("tenant_id", ""),
+                    timeout_ms=ANALYTICS_STATEMENT_TIMEOUT,
+                )
+            except AnalyticsDBError as exc:
+                return {"sql_error": str(exc)}
+        return {"estimated_cost": cost, "sql_error": ""}
+
+    def approve(state: AnalyticsState):
+        cost = float(state.get("estimated_cost", 0.0) or 0.0)
+        with span("analytics.approve", estimated_cost=cost):
+            if cost <= COST_THRESHOLD:
+                return {"approved": True, "rejected": False}
+            decision = interrupt(
+                {
+                    "question": "查询预估成本较高，是否继续执行？",
+                    "sql": state.get("sql", ""),
+                    "estimated_cost": cost,
+                    "threshold": COST_THRESHOLD,
+                }
             )
-        except AnalyticsDBError as exc:
-            return {"sql_error": str(exc)}
+        approved = str(decision).strip().lower() in {
+            "y",
+            "yes",
+            "approve",
+            "同意",
+            "批准",
+        }
+        if not approved:
+            return {
+                "approved": False,
+                "rejected": True,
+                "answer": "查询成本过高，已拒绝执行。",
+            }
+        return {"approved": True, "rejected": False}
+
+    async def execute(state: AnalyticsState):
+        with span(
+            "analytics.execute",
+            tenant_id=state.get("tenant_id", ""),
+            sql_chars=len(state.get("sql", "")),
+        ):
+            try:
+                result = await db.execute(
+                    state.get("sql", ""),
+                    state.get("tenant_id", ""),
+                    max_rows=ANALYTICS_MAX_ROWS,
+                    timeout_ms=ANALYTICS_STATEMENT_TIMEOUT,
+                )
+            except AnalyticsDBError as exc:
+                return {"sql_error": str(exc)}
         return {
             "result": {
                 "columns": result.columns,
@@ -253,9 +343,17 @@ def build_analytics_graph(model, db, checkpointer=None):
         }
 
     async def repair(state: AnalyticsState):
-        plan = await _structured(model, SQLPlan).ainvoke(
-            _repair_prompt(state)
-        )
+        with span(
+            "analytics.repair",
+            repair_count=state.get("repair_count", 0),
+        ):
+            plan = await run_with_timeout(
+                _structured(model, SQLPlan).ainvoke(
+                    _repair_prompt(state)
+                ),
+                MODEL_TIMEOUT_S,
+                "repair",
+            )
         return {
             "sql": plan.sql,
             "sql_error": "",
@@ -268,9 +366,17 @@ def build_analytics_graph(model, db, checkpointer=None):
         }
 
     async def answer(state: AnalyticsState):
-        output = await _structured(model, AnswerOutput).ainvoke(
-            _answer_prompt(state)
-        )
+        with span(
+            "analytics.answer",
+            row_count=(state.get("result") or {}).get("row_count", 0),
+        ):
+            output = await run_with_timeout(
+                _structured(model, AnswerOutput).ainvoke(
+                    _answer_prompt(state)
+                ),
+                MODEL_TIMEOUT_S,
+                "answer",
+            )
         return {"answer": output.answer, "chart_spec": output.chart_spec}
 
     builder = StateGraph(AnalyticsState)
@@ -279,6 +385,8 @@ def build_analytics_graph(model, db, checkpointer=None):
     builder.add_node("refuse", refuse)
     builder.add_node("plan_sql", plan_sql)
     builder.add_node("validate_sql", validate_sql_node)
+    builder.add_node("estimate_cost", estimate_cost)
+    builder.add_node("approve", approve)
     builder.add_node("execute", execute)
     builder.add_node("repair", repair)
     builder.add_node("answer", answer)
@@ -296,7 +404,21 @@ def build_analytics_graph(model, db, checkpointer=None):
     builder.add_conditional_edges(
         "validate_sql",
         _after_validate,
-        {"execute": "execute", "repair": "repair", "fail": "fail"},
+        {
+            "estimate_cost": "estimate_cost",
+            "repair": "repair",
+            "fail": "fail",
+        },
+    )
+    builder.add_conditional_edges(
+        "estimate_cost",
+        _after_estimate,
+        {"approve": "approve", "repair": "repair", "fail": "fail"},
+    )
+    builder.add_conditional_edges(
+        "approve",
+        _after_approve,
+        {"execute": "execute", "reject": END},
     )
     builder.add_edge("repair", "validate_sql")
     builder.add_conditional_edges(
@@ -310,6 +432,8 @@ def build_analytics_graph(model, db, checkpointer=None):
 
 
 def _audit_status(state: AnalyticsState) -> str:
+    if state.get("rejected"):
+        return "rejected"
     if state.get("clarification"):
         return "clarify"
     answer = state.get("answer") or ""
@@ -326,8 +450,9 @@ async def run_analytics_question(
     tenant_id: str,
     config=None,
     user_id: str = "anonymous",
+    metrics: AnalyticsMetrics | None = None,
 ) -> dict:
-    """执行一轮问答，并写一条审计记录。"""
+    """执行一轮问答，写审计，记录日志和过程指标。"""
     request_id = uuid.uuid4().hex
     started = time.perf_counter()
     payload = {
@@ -340,6 +465,9 @@ async def run_analytics_question(
         "sql": "",
         "sql_error": "",
         "repair_count": 0,
+        "estimated_cost": 0.0,
+        "approved": False,
+        "rejected": False,
         "result": {},
         "answer": "",
         "chart_spec": None,
@@ -347,6 +475,7 @@ async def run_analytics_question(
     try:
         state = await graph.ainvoke(payload, config or {})
     except Exception:
+        duration_ms = (time.perf_counter() - started) * 1000
         await write_audit(
             request_id=request_id,
             user_id=user_id,
@@ -356,22 +485,58 @@ async def run_analytics_question(
             status="error",
             row_count=0,
             estimated_cost=0.0,
-            duration_ms=(time.perf_counter() - started) * 1000,
+            duration_ms=duration_ms,
         )
+        logger.warning(
+            "analytics_query request_id=%s tenant_id=%s "
+            "status=error duration_ms=%.1f",
+            request_id,
+            tenant_id,
+            duration_ms,
+        )
+        if metrics is not None:
+            metrics.record(
+                status="error",
+                latency_ms=duration_ms,
+                row_count=0,
+                cost=0.0,
+            )
         raise
 
+    duration_ms = (time.perf_counter() - started) * 1000
     result = state.get("result") or {}
+    status = _audit_status(state)
     await write_audit(
         request_id=request_id,
         user_id=user_id,
         tenant_id=tenant_id,
         question=question,
         sql=state.get("sql", ""),
-        status=_audit_status(state),
+        status=status,
         row_count=result.get("row_count", 0),
-        estimated_cost=0.0,
-        duration_ms=(time.perf_counter() - started) * 1000,
+        estimated_cost=state.get("estimated_cost", 0.0),
+        duration_ms=duration_ms,
     )
+    logger.info(
+        "analytics_query request_id=%s tenant_id=%s status=%s "
+        "row_count=%s duration_ms=%.1f",
+        request_id,
+        tenant_id,
+        status,
+        result.get("row_count", 0),
+        duration_ms,
+    )
+    if metrics is not None:
+        sql_error = (state.get("sql_error") or "").lower()
+        metrics.record(
+            status=status,
+            latency_ms=duration_ms,
+            row_count=result.get("row_count", 0),
+            cost=float(state.get("estimated_cost", 0.0) or 0.0),
+            permission_denied="permission denied" in sql_error,
+            clarification=bool(state.get("clarification")),
+            repair_count=state.get("repair_count", 0),
+        )
     state["request_id"] = request_id
     state["user_id"] = user_id
     return state

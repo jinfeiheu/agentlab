@@ -40,6 +40,9 @@ class _IntentModel:
 class _NoExecuteDB:
     """歧义/拒答路径不应执行 SQL；一旦执行就失败。"""
 
+    async def explain(self, *args, **kwargs):
+        return 0.0
+
     async def execute(self, *args, **kwargs):
         raise AssertionError("歧义/拒答问题不应执行 SQL")
 

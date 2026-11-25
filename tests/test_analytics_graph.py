@@ -45,6 +45,9 @@ class FakeAnalyticsDB:
             raise response
         return response
 
+    async def explain(self, sql_text, tenant_id, timeout_ms=5000):
+        return 0.0
+
 
 def _query_result() -> QueryResult:
     return QueryResult(

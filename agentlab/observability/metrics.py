@@ -91,3 +91,80 @@ class MetricsRecorder:
                 estimate_cost(usage, self.model) for usage in usages
             ),
         }
+
+
+@dataclass
+class AnalyticsMetrics:
+    """Analytics 查询的过程指标。"""
+
+    records: list[dict] = field(default_factory=list)
+
+    def record(
+        self,
+        *,
+        status: str,
+        latency_ms: float,
+        row_count: int = 0,
+        cost: float = 0.0,
+        permission_denied: bool = False,
+        clarification: bool = False,
+        repair_count: int = 0,
+    ) -> None:
+        self.records.append(
+            {
+                "status": status,
+                "latency_ms": latency_ms,
+                "row_count": row_count,
+                "cost": cost,
+                "permission_denied": permission_denied,
+                "clarification": clarification,
+                "repair_count": repair_count,
+            }
+        )
+
+    def summary(self) -> dict[str, float]:
+        count = len(self.records)
+        if count == 0:
+            return {
+                "count": 0,
+                "error_rate": 0.0,
+                "p50_ms": 0.0,
+                "p95_ms": 0.0,
+                "avg_row_count": 0.0,
+                "total_cost": 0.0,
+                "permission_violation": 0,
+                "clarification_rate": 0.0,
+                "avg_repair_count": 0.0,
+            }
+        latencies = [float(record["latency_ms"]) for record in self.records]
+        return {
+            "count": count,
+            "error_rate": sum(
+                1 for record in self.records if record["status"] == "error"
+            )
+            / count,
+            "p50_ms": float(statistics.median(latencies)),
+            "p95_ms": _p95(latencies),
+            "avg_row_count": sum(
+                int(record["row_count"]) for record in self.records
+            )
+            / count,
+            "total_cost": sum(
+                float(record["cost"]) for record in self.records
+            ),
+            "permission_violation": sum(
+                1
+                for record in self.records
+                if record["permission_denied"]
+            ),
+            "clarification_rate": sum(
+                1
+                for record in self.records
+                if record["clarification"]
+            )
+            / count,
+            "avg_repair_count": sum(
+                int(record["repair_count"]) for record in self.records
+            )
+            / count,
+        }
