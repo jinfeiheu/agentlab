@@ -228,21 +228,38 @@ def _structured(model, schema):
     return model.with_structured_output(schema, method="json_mode")
 
 
+async def classify_question(
+    model, question: str, tenant_id: str, config=None
+) -> Intent:
+    """独立意图解析；auto 路由与图内 understand 共用。"""
+    return await run_with_timeout(
+        _structured(model, Intent).ainvoke(
+            _understand_prompt(
+                {"question": question, "tenant_id": tenant_id}
+            ),
+            config=config or {},
+        ),
+        MODEL_TIMEOUT_S,
+        "understand",
+    )
+
+
 def build_analytics_graph(model, db, checkpointer=None):
     """构建单 Agent 基线图；模型和 DB 都可注入 fake。"""
 
     async def understand(state: AnalyticsState):
+        if state.get("intent"):
+            # auto 路由已经做过意图解析，避免重复模型调用。
+            return {"intent": state["intent"]}
         with span(
             "analytics.understand",
             tenant_id=state.get("tenant_id", ""),
             question_chars=len(state.get("question", "")),
         ):
-            result = await run_with_timeout(
-                _structured(model, Intent).ainvoke(
-                    _understand_prompt(state)
-                ),
-                MODEL_TIMEOUT_S,
-                "understand",
+            result = await classify_question(
+                model,
+                state.get("question", ""),
+                state.get("tenant_id", ""),
             )
         return {"intent": result.model_dump()}
 
@@ -387,17 +404,32 @@ def build_analytics_graph(model, db, checkpointer=None):
         }
 
     async def answer(state: AnalyticsState):
+        result = state.get("result") or {}
+        rows = result.get("rows") or []
         with span(
             "analytics.answer",
-            row_count=(state.get("result") or {}).get("row_count", 0),
+            row_count=result.get("row_count", 0),
         ):
-            output = await run_with_timeout(
-                _structured(model, AnswerOutput).ainvoke(
-                    _answer_prompt(state)
-                ),
-                MODEL_TIMEOUT_S,
-                "answer",
-            )
+            try:
+                output = await run_with_timeout(
+                    _structured(model, AnswerOutput).ainvoke(
+                        _answer_prompt(state)
+                    ),
+                    MODEL_TIMEOUT_S,
+                    "answer",
+                )
+            except Exception as exc:  # noqa: BLE001 - 解析失败不能丢结果
+                logger.warning(
+                    "analytics_answer_failed error=%s",
+                    type(exc).__name__,
+                )
+                text = (
+                    "查询没有返回数据。"
+                    if not rows
+                    else f"查询返回 {result.get('row_count', len(rows))} "
+                    f"行结果：{rows[:5]}"
+                )
+                output = AnswerOutput(answer=text, chart_spec=None)
         return {"answer": output.answer, "chart_spec": output.chart_spec}
 
     builder = StateGraph(AnalyticsState)

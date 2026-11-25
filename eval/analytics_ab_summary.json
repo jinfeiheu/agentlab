@@ -1,0 +1,85 @@
+{
+  "generated_at": "2026-11-25",
+  "golden": "eval/analytics_golden.jsonl",
+  "count": 50,
+  "auto_approve": true,
+  "complex_subset_tags": [
+    "expensive",
+    "join",
+    "window"
+  ],
+  "results": {
+    "single": {
+      "arch": "single",
+      "task_success": 1.0,
+      "execution_accuracy": 1.0,
+      "clarification_rate": 1.0,
+      "refusal_rate": 1.0,
+      "permission_violation": 0,
+      "pii_leaks": 0,
+      "p50_latency_ms": 5362.662534986157,
+      "p95_latency_ms": 8369.828906026669,
+      "avg_cost_estimate": 0.00557512,
+      "avg_tokens": 2787.56,
+      "avg_step_count": 0.8,
+      "avg_unnecessary_steps": 0.0,
+      "replan_attempts": 0,
+      "replan_success": null,
+      "critic_catch_rate": null,
+      "route_decisions": {
+        "single": 50,
+        "multi": 0
+      },
+      "complex_subset_count": 17,
+      "complex_subset_success": 1.0
+    },
+    "multi": {
+      "arch": "multi",
+      "task_success": 0.98,
+      "execution_accuracy": 1.0,
+      "clarification_rate": 0.8,
+      "refusal_rate": 1.0,
+      "permission_violation": 0,
+      "pii_leaks": 0,
+      "p50_latency_ms": 6835.059761011507,
+      "p95_latency_ms": 14226.865047996398,
+      "avg_cost_estimate": 0.00638452,
+      "avg_tokens": 3192.26,
+      "avg_step_count": 3.5,
+      "avg_unnecessary_steps": 0.0,
+      "replan_attempts": 1,
+      "replan_success": 1.0,
+      "critic_catch_rate": 0.024390243902439025,
+      "route_decisions": {
+        "single": 0,
+        "multi": 50
+      },
+      "complex_subset_count": 17,
+      "complex_subset_success": 1.0
+    },
+    "auto": {
+      "arch": "auto",
+      "task_success": 1.0,
+      "execution_accuracy": 1.0,
+      "clarification_rate": 1.0,
+      "refusal_rate": 1.0,
+      "permission_violation": 0,
+      "pii_leaks": 0,
+      "p50_latency_ms": 5034.988678002264,
+      "p95_latency_ms": 9770.214894029777,
+      "avg_cost_estimate": 0.0055212,
+      "avg_tokens": 2760.6,
+      "avg_step_count": 0.86,
+      "avg_unnecessary_steps": 0.0,
+      "replan_attempts": 0,
+      "replan_success": null,
+      "critic_catch_rate": 0.0,
+      "route_decisions": {
+        "single": 49,
+        "multi": 1
+      },
+      "complex_subset_count": 17,
+      "complex_subset_success": 1.0
+    }
+  }
+}

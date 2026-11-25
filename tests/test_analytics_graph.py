@@ -84,6 +84,26 @@ async def test_graph_answers_normal_question():
     assert db.queries[0][1] == "tenant_a"
 
 
+async def test_graph_keeps_result_when_answer_parsing_fails():
+    model = ScriptedAnalyticsModel(
+        [
+            Intent(intent="answer", metrics=["revenue"]),
+            SQLPlan(
+                sql="SELECT SUM(oi.quantity * oi.unit_price) AS revenue "
+                "FROM order_items oi"
+            ),
+            RuntimeError("AnswerOutput 解析失败"),
+        ]
+    )
+    db = FakeAnalyticsDB([_query_result()])
+    graph = build_analytics_graph(model, db)
+
+    result = await run_analytics_question(graph, "上个月收入", "tenant_a")
+
+    assert result["result"]["row_count"] == 1
+    assert "100" in result["answer"]
+
+
 async def test_graph_clarifies_ambiguous_question():
     model = ScriptedAnalyticsModel(
         [

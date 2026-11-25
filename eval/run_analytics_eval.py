@@ -12,12 +12,17 @@ from decimal import Decimal
 from pathlib import Path
 
 import tiktoken
+from langchain_core.callbacks import BaseCallbackHandler
 
 from agentlab.analytics.db import AnalyticsDB
 from agentlab.analytics.graph import (
     build_analytics_graph,
     run_analytics_question,
 )
+from agentlab.analytics.multi_agent import (
+    build_multi_agent_analytics_graph,
+)
+from agentlab.analytics.routing import build_auto_analytics_graph
 from agentlab.config import ANALYTICS_GOLDEN_PATH
 from agentlab.models import build_chat_model
 
@@ -267,8 +272,10 @@ def _runtime_error_class(message: str) -> str:
 def classify_failure(record: dict) -> str | None:
     """把失败归入固定类别；已恢复的 SQL 错误也保留类别。"""
     if record.get("matched"):
-        if record.get("repair_count", 0) or record.get(
-            "validation_failures", 0
+        if (
+            record.get("repair_count", 0)
+            or record.get("validation_failures", 0)
+            or record.get("replan_count", 0)
         ):
             return "sql_error"
         return None
@@ -324,8 +331,12 @@ def annotate_record(record: dict) -> dict:
         if expected == "answer"
         else None
     )
-    record["step_count"] = 1 if record.get("sql") else 0
-    record["unnecessary_steps"] = 0
+    record["step_count"] = int(
+        record.get("agent_steps", 0) or 0
+    ) or (1 if record.get("sql") else 0)
+    record["unnecessary_steps"] = int(
+        record.get("duplicate_queries", 0) or 0
+    )
     record["empty_result"] = (
         expected == "answer"
         and "columns" in result
@@ -349,18 +360,27 @@ def process_metrics(records: list[dict]) -> dict:
         record
         for record in records
         if record.get("repair_count", 0) > 0
+        or record.get("replan_count", 0) > 0
     ]
     exposures = [
         record
         for record in records
         if record.get("validation_failures", 0) > 0
         or record.get("sql_error")
+        or record.get("critic_evaluations", 0) > 0
     ]
     catches = sum(
         1
         for record in exposures
         if record.get("validation_failures", 0) > 0
+        or record.get("critic_rejections", 0) > 0
     )
+    route_decisions = {
+        name: sum(
+            1 for record in records if record.get("route") == name
+        )
+        for name in ("single", "multi")
+    }
     classes = {
         name: {"count": 0, "recovered": 0, "recovery_rate": 0.0}
         for name in FAILURE_CLASSES
@@ -414,6 +434,7 @@ def process_metrics(records: list[dict]) -> dict:
         "critic_catch_rate": (
             catches / len(exposures) if exposures else None
         ),
+        "route_decisions": route_decisions,
         "failure_classes": classes,
     }
 
@@ -498,6 +519,7 @@ def compute_metrics(records: list[dict]) -> dict:
     ]
     latencies = sorted(float(record.get("latency_ms", 0)) for record in records)
     costs = [float(record.get("cost_estimate", 0)) for record in records]
+    tokens = [float(record.get("tokens", 0)) for record in records]
     return {
         "count": len(records),
         "task_success": _mean(
@@ -525,6 +547,8 @@ def compute_metrics(records: list[dict]) -> dict:
         "p95_latency_ms": _percentile(latencies, 95),
         "total_cost_estimate": sum(costs),
         "avg_cost_estimate": _mean(costs),
+        "total_tokens": sum(tokens),
+        "avg_tokens": _mean(tokens),
         **process_metrics(records),
     }
 
@@ -551,6 +575,48 @@ def estimate_cost(
     return tokens / 1000 * price_per_1k
 
 
+class TokenUsageTracker(BaseCallbackHandler):
+    """从 LangChain 回调中累计真实 token usage；拿不到时由兜底估算补位。"""
+
+    def __init__(self) -> None:
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+
+    @property
+    def total_tokens(self) -> int:
+        return self.prompt_tokens + self.completion_tokens
+
+    def on_llm_end(self, response, **kwargs) -> None:
+        counted = False
+        for batch in getattr(response, "generations", []) or []:
+            for generation in batch:
+                message = getattr(generation, "message", None)
+                usage = getattr(message, "usage_metadata", None)
+                if not usage:
+                    continue
+                self.prompt_tokens += int(
+                    usage.get("input_tokens", 0) or 0
+                )
+                self.completion_tokens += int(
+                    usage.get("output_tokens", 0) or 0
+                )
+                counted = True
+        if counted:
+            return
+        llm_output = getattr(response, "llm_output", None) or {}
+        usage = llm_output.get("token_usage") or llm_output.get("usage") or {}
+        self.prompt_tokens += int(
+            usage.get("prompt_tokens", 0)
+            or usage.get("input_tokens", 0)
+            or 0
+        )
+        self.completion_tokens += int(
+            usage.get("completion_tokens", 0)
+            or usage.get("output_tokens", 0)
+            or 0
+        )
+
+
 def _matches(item: dict, state: dict, outcome: str) -> bool:
     expected = item.get("expected_outcome")
     if expected != "answer":
@@ -567,7 +633,10 @@ def _matches(item: dict, state: dict, outcome: str) -> bool:
 
 
 async def run_eval(
-    items: list[dict], graph, cost_per_1k: float | None = None
+    items: list[dict],
+    graph,
+    cost_per_1k: float | None = None,
+    arch: str = "single",
 ) -> dict:
     """逐题执行并返回 summary + records；graph 可注入 fake。"""
     price = (
@@ -576,14 +645,30 @@ async def run_eval(
         else float(os.getenv("ANALYTICS_EVAL_COST_PER_1K", "0.002"))
     )
     records = []
+    tracker = TokenUsageTracker()
     for item in items:
         started = time.perf_counter()
+        tokens_before = tracker.total_tokens
         try:
             state = await run_analytics_question(
-                graph, item["question"], item["tenant_id"]
+                graph,
+                item["question"],
+                item["tenant_id"],
+                config={"callbacks": [tracker]},
             )
             latency_ms = (time.perf_counter() - started) * 1000
             outcome = actual_outcome(state)
+            tokens = tracker.total_tokens - tokens_before
+            cost = (
+                tokens / 1000 * price
+                if tokens
+                else estimate_cost(
+                    item["question"],
+                    state.get("sql", ""),
+                    state.get("answer", ""),
+                    price,
+                )
+            )
             record = {
                 "question": item["question"],
                 "tenant_id": item["tenant_id"],
@@ -591,18 +676,29 @@ async def run_eval(
                 "expected_columns": item.get("expected_columns"),
                 "expected_result": item.get("expected_result"),
                 "expected_sql": item.get("expected_sql"),
+                "arch": arch,
+                "route": state.get("route") or arch,
                 "actual_outcome": outcome,
                 "matched": _matches(item, state, outcome),
                 "latency_ms": latency_ms,
-                "cost_estimate": estimate_cost(
-                    item["question"],
-                    state.get("sql", ""),
-                    state.get("answer", ""),
-                    price,
-                ),
+                "cost_estimate": cost,
+                "tokens": tokens,
                 "repair_count": state.get("repair_count", 0),
                 "validation_failures": state.get(
                     "validation_failures", 0
+                ),
+                "agent_steps": int(state.get("steps", 0) or 0),
+                "duplicate_queries": int(
+                    state.get("duplicate_queries", 0) or 0
+                ),
+                "critic_evaluations": int(
+                    state.get("critic_evaluations", 0) or 0
+                ),
+                "critic_rejections": int(
+                    state.get("critic_rejections", 0) or 0
+                ),
+                "replan_count": int(
+                    state.get("replan_count", 0) or 0
                 ),
                 "estimated_cost": float(
                     state.get("estimated_cost", 0.0) or 0.0
@@ -627,6 +723,7 @@ async def run_eval(
                 "tags": item.get("tags", []),
             }
         except Exception as exc:  # noqa: BLE001 - 单题失败不中断评测
+            tokens = tracker.total_tokens - tokens_before
             record = {
                 "question": item["question"],
                 "tenant_id": item["tenant_id"],
@@ -634,12 +731,20 @@ async def run_eval(
                 "expected_columns": item.get("expected_columns"),
                 "expected_result": item.get("expected_result"),
                 "expected_sql": item.get("expected_sql"),
+                "arch": arch,
+                "route": arch,
                 "actual_outcome": "error",
                 "matched": False,
                 "latency_ms": (time.perf_counter() - started) * 1000,
-                "cost_estimate": 0.0,
+                "cost_estimate": tokens / 1000 * price if tokens else 0.0,
+                "tokens": tokens,
                 "repair_count": 0,
                 "validation_failures": 0,
+                "agent_steps": 0,
+                "duplicate_queries": 0,
+                "critic_evaluations": 0,
+                "critic_rejections": 0,
+                "replan_count": 0,
                 "estimated_cost": 0.0,
                 "rejected": False,
                 "sql": "",
@@ -652,6 +757,7 @@ async def run_eval(
             }
         records.append(annotate_record(record))
     summary = compute_metrics(records)
+    summary["arch"] = arch
     return {"summary": summary, "records": records}
 
 
@@ -681,6 +787,12 @@ def main() -> None:
         help="评测时自动批准高成本查询（不改变生产默认阈值）",
     )
     parser.add_argument(
+        "--arch",
+        choices=("single", "multi", "auto"),
+        default="single",
+        help="Agent 架构；auto 按问题复杂度路由",
+    )
+    parser.add_argument(
         "--output", type=Path, default=None, help="完整 JSON 报告输出路径"
     )
     parser.add_argument(
@@ -702,10 +814,19 @@ def main() -> None:
         from agentlab.analytics import graph as graph_module
 
         graph_module.COST_THRESHOLD = float("inf")
-    graph = build_analytics_graph(
-        build_chat_model(temperature=0), AnalyticsDB()
-    )
-    report = asyncio.run(run_eval(items, graph))
+    model = build_chat_model(temperature=0)
+    db = AnalyticsDB()
+    if args.arch == "multi":
+        graph = build_multi_agent_analytics_graph(model, db)
+    elif args.arch == "auto":
+        single_graph = build_analytics_graph(model, db)
+        multi_graph = build_multi_agent_analytics_graph(model, db)
+        graph = build_auto_analytics_graph(
+            model, single_graph, multi_graph
+        )
+    else:
+        graph = build_analytics_graph(model, db)
+    report = asyncio.run(run_eval(items, graph, arch=args.arch))
     print(json.dumps(report["summary"], ensure_ascii=False, indent=2))
     for record in report["records"]:
         if not record["matched"]:

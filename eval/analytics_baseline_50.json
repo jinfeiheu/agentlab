@@ -1,0 +1,85 @@
+{
+  "generated_at": "2026-11-25",
+  "golden": "eval/analytics_golden.jsonl",
+  "count": 50,
+  "auto_approve": true,
+  "arch": "single",
+  "summary": {
+    "count": 50,
+    "task_success": 1.0,
+    "execution_accuracy": 1.0,
+    "clarification_rate": 1.0,
+    "refusal_rate": 1.0,
+    "permission_violation": 0,
+    "pii_leaks": 0,
+    "avg_repair_count": 0.0,
+    "p50_latency_ms": 5362.662534986157,
+    "p95_latency_ms": 8369.828906026669,
+    "total_cost_estimate": 0.278756,
+    "avg_cost_estimate": 0.00557512,
+    "total_tokens": 139378.0,
+    "avg_tokens": 2787.56,
+    "route_accuracy": 1.0,
+    "tool_selection_accuracy": 1.0,
+    "plan_validity": 1.0,
+    "avg_step_count": 0.8,
+    "avg_unnecessary_steps": 0.0,
+    "replan_attempts": 0,
+    "replan_success": null,
+    "critic_exposures": 0,
+    "critic_catches": 0,
+    "critic_catch_rate": null,
+    "route_decisions": {
+      "single": 50,
+      "multi": 0
+    },
+    "failure_classes": {
+      "ambiguation": {
+        "count": 0,
+        "recovered": 0,
+        "recovery_rate": 0.0
+      },
+      "schema_gap": {
+        "count": 0,
+        "recovered": 0,
+        "recovery_rate": 0.0
+      },
+      "metric_conflict": {
+        "count": 0,
+        "recovered": 0,
+        "recovery_rate": 0.0
+      },
+      "sql_error": {
+        "count": 0,
+        "recovered": 0,
+        "recovery_rate": 0.0
+      },
+      "empty_result": {
+        "count": 0,
+        "recovered": 0,
+        "recovery_rate": 0.0
+      },
+      "permission": {
+        "count": 0,
+        "recovered": 0,
+        "recovery_rate": 0.0
+      },
+      "cost": {
+        "count": 0,
+        "recovered": 0,
+        "recovery_rate": 0.0
+      },
+      "model_error": {
+        "count": 0,
+        "recovered": 0,
+        "recovery_rate": 0.0
+      },
+      "tool_error": {
+        "count": 0,
+        "recovered": 0,
+        "recovery_rate": 0.0
+      }
+    },
+    "arch": "single"
+  }
+}

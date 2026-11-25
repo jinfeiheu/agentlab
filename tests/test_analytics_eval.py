@@ -1,6 +1,8 @@
 """Analytics 评测的离线测试：golden 校验、结果归一化和指标汇总。"""
 
 from pathlib import Path
+from types import SimpleNamespace
+
 from eval.run_analytics_eval import (
     FAILURE_CLASSES,
     actual_outcome,
@@ -16,6 +18,7 @@ from eval.run_analytics_eval import (
     rows_match,
     run_eval,
     select_smoke_items,
+    TokenUsageTracker,
 )
 
 GOLDEN = (
@@ -422,6 +425,28 @@ def test_process_metrics():
     assert set(summary["failure_classes"]) == set(FAILURE_CLASSES)
 
 
+def test_token_usage_tracker_reads_usage_metadata():
+    message = SimpleNamespace(
+        usage_metadata={"input_tokens": 10, "output_tokens": 5}
+    )
+    generation = SimpleNamespace(message=message)
+    response = SimpleNamespace(generations=[[generation]], llm_output={})
+
+    tracker = TokenUsageTracker()
+    tracker.on_llm_end(response)
+
+    assert tracker.prompt_tokens == 10
+    assert tracker.completion_tokens == 5
+    assert tracker.total_tokens == 15
+
+
+def test_annotate_uses_multi_agent_steps():
+    record = _record(agent_steps=5, duplicate_queries=2)
+
+    assert record["step_count"] == 5
+    assert record["unnecessary_steps"] == 2
+
+
 def test_process_metrics_without_attempts_returns_none():
     summary = compute_metrics([_record()])
 
@@ -527,6 +552,29 @@ class FakeGraph:
                 "duration_ms": 1.0,
             },
         }
+
+
+async def test_run_eval_records_arch_and_route():
+    items = [
+        {
+            "question": "查询 1",
+            "tenant_id": "tenant_a",
+            "expected_outcome": "answer",
+            "expected_columns": ["x"],
+            "expected_result": [[1]],
+            "tags": [],
+        }
+    ]
+
+    report = await run_eval(items, FakeGraph(), arch="multi")
+
+    assert report["summary"]["arch"] == "multi"
+    assert report["records"][0]["arch"] == "multi"
+    assert report["records"][0]["route"] == "multi"
+    assert report["summary"]["route_decisions"] == {
+        "single": 0,
+        "multi": 1,
+    }
 
 
 async def test_run_eval_with_fake_graph():
