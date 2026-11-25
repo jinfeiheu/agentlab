@@ -1,13 +1,41 @@
-# Agent Interview Lab
+# AgentLab
 
-一个可直接跑起来、可度量、可演示的中文 RAG / Agent 项目。它把 LangChain、LangGraph、pgvector、混合检索、重排、LLM-as-judge、OpenTelemetry/Phoenix、FastAPI/SSE、MCP、安全、长期记忆和多 Agent 串成四个阶段，并用一套冻结的 easy 集和一套 100 条的 hard 集记录真实取舍与失败模式。
+面向高级 LLM / Agent 岗位的作品集：两条生产风格 Agent 线，均带评测、安全、成本与 SLO。
 
-项目不是“调用一次模型就结束”的 demo：每一轮回答都经过检索工具、引用校验、上下文预算、身份边界和可观测性；每次改动都用离线测试和真实评测验证。
+## 先看这里：Analytics Agent（主作品）
+
+多租户 Text-to-SQL 数据分析 Agent。重点不是“生成 SQL”，而是把评测、安全、成本和可靠性做成可验证的系统。
+
+- 50 条 golden：`task_success=1.0`、clarification/refusal=1.0、越权 0、PII 0
+- P95 8.3s、平均成本 ¥0.0056/题；20/50 并发 0% 错误
+- 三层 SQL 安全：sqlglot + 只读角色 + PostgreSQL RLS
+- 审计、PII 脱敏、`EXPLAIN` 成本守卫、HITL fail-closed
+- single / multi / auto A/B：multi 在复杂子集无提升但 P95 +70%，默认 single
+
+```bash
+bash scripts/start_analytics_db.sh
+uv run agentlab-analytics "tenant_a 在 2026 年 9 月的 GMV 是多少？" --tenant tenant_a
+bash scripts/ci_analytics.sh   # 单测 + 20 条 smoke + 越权/PII/回归门禁
+```
+
+验收数据：`eval/analytics_final_acceptance.json`。Runbook：`docs/runbook-analytics.md`。面试稿：`docs/interview-notes-analytics.md`。
+
+## 第二作品：Conversational / RAG Agent
+
+tool-calling + hybrid retrieval（BM25 + 向量 + RRF + rerank）+ MCP + 长期记忆 + JWT/SSE；easy/hard 两套冻结评测和 closed-book 消融。它也是 Analytics API 的基础设施来源（auth / SSE / guard / tracing）。
+
+### 5 分钟阅读路径
+
+1. 本页 Analytics 摘要与验收数据
+2. `docs/interview-notes-analytics.md`
+3. `docs/runbook-analytics.md`
+4. RAG 细节：本页「评测方法与结果」「多 Agent」两节
+5. `docs/CHANGELOG.md`：按里程碑看演进
 
 ## 目录结构
 
 ```
-langchain-demo/
+agentlab/
 ├── agentlab/
 │   ├── cli.py               # CLI:手写图 / --simple / --multi / --user
 │   ├── config.py            # 全部环境变量与项目路径
@@ -73,6 +101,7 @@ langchain-demo/
 │   ├── seed_demo.sql        # users/tickets 种子
 │   └── demo.sh              # 一键演示脚本(见下)
 ├── docs/
+│   ├── CHANGELOG.md         # 按里程碑的演进摘要
 │   ├── interview-notes.md   # 面试口述稿与真实调试故事
 │   ├── interview-notes-analytics.md # 数据分析 Agent 口述稿
 │   ├── runbook-analytics.md # SLI/SLO、告警、故障处理、回滚
@@ -123,7 +152,7 @@ langchain-demo/
 本地开发**不需要构建应用镜像**：源码直接用 `uv run` 运行，Docker 只承载 pgvector/Postgres 依赖；`Dockerfile` 和 `docker-compose.yml` 仅作为部署示例保留。
 
 ```bash
-cd langchain-demo
+cd agentlab
 cp .env.example .env
 # 编辑 .env，把 DEEPSEEK_API_KEY 换成真实 Key
 
