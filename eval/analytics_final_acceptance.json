@@ -1,0 +1,117 @@
+{
+  "generated_at": "2026-11-25",
+  "unit_tests": "425 passed, 27 skipped",
+  "integration_tests": "27 passed",
+  "eval_50": {
+    "count": 50,
+    "task_success": 1.0,
+    "execution_accuracy": 1.0,
+    "clarification_rate": 1.0,
+    "refusal_rate": 1.0,
+    "permission_violation": 0,
+    "pii_leaks": 0,
+    "avg_repair_count": 0.0,
+    "p50_latency_ms": 4967.712957994081,
+    "p95_latency_ms": 8308.43483703211,
+    "total_cost_estimate": 0.280526,
+    "avg_cost_estimate": 0.00561052,
+    "total_tokens": 140263.0,
+    "avg_tokens": 2805.26,
+    "route_accuracy": 1.0,
+    "tool_selection_accuracy": 1.0,
+    "plan_validity": 1.0,
+    "avg_step_count": 0.8,
+    "avg_unnecessary_steps": 0.0,
+    "replan_attempts": 0,
+    "replan_success": null,
+    "critic_exposures": 0,
+    "critic_catches": 0,
+    "critic_catch_rate": null,
+    "route_decisions": {
+      "single": 50,
+      "multi": 0
+    },
+    "failure_classes": {
+      "ambiguation": {
+        "count": 0,
+        "recovered": 0,
+        "recovery_rate": 0.0
+      },
+      "schema_gap": {
+        "count": 0,
+        "recovered": 0,
+        "recovery_rate": 0.0
+      },
+      "metric_conflict": {
+        "count": 0,
+        "recovered": 0,
+        "recovery_rate": 0.0
+      },
+      "sql_error": {
+        "count": 0,
+        "recovered": 0,
+        "recovery_rate": 0.0
+      },
+      "empty_result": {
+        "count": 0,
+        "recovered": 0,
+        "recovery_rate": 0.0
+      },
+      "permission": {
+        "count": 0,
+        "recovered": 0,
+        "recovery_rate": 0.0
+      },
+      "cost": {
+        "count": 0,
+        "recovered": 0,
+        "recovery_rate": 0.0
+      },
+      "model_error": {
+        "count": 0,
+        "recovered": 0,
+        "recovery_rate": 0.0
+      },
+      "tool_error": {
+        "count": 0,
+        "recovered": 0,
+        "recovery_rate": 0.0
+      }
+    },
+    "arch": "single"
+  },
+  "load_20": {
+    "concurrency": 20,
+    "total": 20,
+    "error_rate": 0.0,
+    "p50_ms": 4995.300045993645,
+    "p95_ms": 8195.640418038238,
+    "p99_ms": 11857.724911009427,
+    "avg_cost_estimate": 0.0061879000000000005,
+    "total_cost_estimate": 0.123758
+  },
+  "load_50": {
+    "concurrency": 50,
+    "total": 50,
+    "error_rate": 0.0,
+    "p50_ms": 5623.927884967998,
+    "p95_ms": 8255.884302023333,
+    "p99_ms": 8840.022386983037,
+    "avg_cost_estimate": 0.0062425200000000005,
+    "total_cost_estimate": 0.312126
+  },
+  "audit_rows": {
+    "success": 40,
+    "clarify": 5,
+    "refuse": 5
+  },
+  "checks": {
+    "task_success_gte_85": true,
+    "permission_violation_zero": true,
+    "pii_leaks_zero": true,
+    "p95_lte_12s": true,
+    "avg_cost_lte_0_02": true,
+    "load_20_error_lte_1pct": true,
+    "load_50_error_lte_1pct": true
+  }
+}

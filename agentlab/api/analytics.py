@@ -80,6 +80,29 @@ def _step_summary(node: str, data: dict) -> dict:
     return summary
 
 
+async def _audit_stream(
+    state: dict,
+    payload: dict,
+    status: str,
+    duration_ms: float,
+    user_id: str,
+) -> None:
+    result = state.get("result") or {}
+    await write_audit(
+        request_id=str(payload.get("request_id") or ""),
+        user_id=user_id,
+        tenant_id=str(payload.get("tenant_id") or ""),
+        question=str(payload.get("question") or ""),
+        sql=str(state.get("sql") or ""),
+        status=status,
+        row_count=result.get("row_count", 0),
+        estimated_cost=float(state.get("estimated_cost", 0.0) or 0.0),
+        duration_ms=duration_ms,
+        prompt_version=_summarize(state.get("prompt_versions")),
+        model_id=_summarize(state.get("model_ids")),
+    )
+
+
 async def analytics_events(
     graph,
     payload: dict,
@@ -109,6 +132,13 @@ async def analytics_events(
                 payload, config=config, stream_mode="updates"
             ):
                 if request is not None and await request.is_disconnected():
+                    await _audit_stream(
+                        state,
+                        payload,
+                        "cancelled",
+                        (time.perf_counter() - started) * 1000,
+                        user_id,
+                    )
                     return
                 for node, data in (update or {}).items():
                     if not isinstance(data, dict):
@@ -142,6 +172,16 @@ async def analytics_events(
                             }
                         )
     except asyncio.CancelledError:
+        try:
+            await _audit_stream(
+                state,
+                payload,
+                "cancelled",
+                (time.perf_counter() - started) * 1000,
+                user_id,
+            )
+        except Exception:  # noqa: BLE001 - 取消路径尽力写审计
+            pass
         yield sse({"type": "error", "message": "cancelled"})
         return
     except Exception as exc:  # noqa: BLE001 - 流内错误统一事件
@@ -151,19 +191,7 @@ async def analytics_events(
     duration_ms = (time.perf_counter() - started) * 1000
     result = state.get("result") or {}
     status = _audit_status(state)
-    await write_audit(
-        request_id=request_id,
-        user_id=user_id,
-        tenant_id=str(payload.get("tenant_id") or ""),
-        question=str(payload.get("question") or ""),
-        sql=str(state.get("sql") or ""),
-        status=status,
-        row_count=result.get("row_count", 0),
-        estimated_cost=float(state.get("estimated_cost", 0.0) or 0.0),
-        duration_ms=duration_ms,
-        prompt_version=_summarize(state.get("prompt_versions")),
-        model_id=_summarize(state.get("model_ids")),
-    )
+    await _audit_stream(state, payload, status, duration_ms, user_id)
     sessions.record(
         user_id,
         session_id,

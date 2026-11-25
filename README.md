@@ -67,15 +67,19 @@ langchain-demo/
 │   ├── start_db.sh          # 启动 pgvector 并写入 demo 工单
 │   ├── start_analytics_db.sh # Analytics 只读角色 + 合成数仓
 │   ├── ci_analytics.sh      # 单测 + 20 条 smoke + 越权/PII/回归门禁
+│   ├── load_analytics.py    # 20/50 并发压测
+│   ├── demo_analytics.sh    # 正常/澄清/越权/高成本四场景
 │   ├── start_phoenix.sh     # 启动 Phoenix
 │   ├── seed_demo.sql        # users/tickets 种子
 │   └── demo.sh              # 一键演示脚本(见下)
 ├── docs/
 │   ├── interview-notes.md   # 面试口述稿与真实调试故事
+│   ├── interview-notes-analytics.md # 数据分析 Agent 口述稿
+│   ├── runbook-analytics.md # SLI/SLO、告警、故障处理、回滚
 │   ├── mcp-clients.md       # Claude Desktop/Code/Cursor 配置
 │   ├── results/             # 最终评测矩阵 Markdown 摘要
 │   └── archive/             # 2026-10-20 旧计划与规格
-├── tests/                   # 419 个离线测试,27 个集成测试默认跳过
+├── tests/                   # 425 个离线测试,27 个集成测试默认跳过
 ├── pyproject.toml
 ├── Dockerfile
 ├── docker-compose.yml
@@ -453,6 +457,33 @@ uv run agentlab-api
 # 打开 http://localhost:8000/analytics
 ```
 
+### 压测与 SLO
+
+| 并发 | 请求数 | 错误率 | P50 | P95 | P99 | 平均成本/题 |
+|---:|---:|---:|---:|---:|---:|---:|
+| 20 | 20 | 0% | 5.00s | 8.20s | 11.86s | ¥0.00619 |
+| 50 | 50 | 0% | 5.62s | 8.26s | 8.84s | ¥0.00624 |
+
+SLO：成功率 ≥99%、P95 ≤12s、单任务成本 ≤¥0.02、50 条 task_success ≥85%、越权 0、PII 0、审计覆盖 100%。详细告警与故障处理见 [runbook-analytics.md](docs/runbook-analytics.md)。
+
+最终验收：425 单测 + 27 集成全绿；50 条 eval `task_success=1.0`、P95 8.31s、平均成本 ¥0.00561、越权 0、PII 0；审计 50/50（40 success / 5 clarify / 5 refuse）。汇总见 `eval/analytics_final_acceptance.json`。
+
+```bash
+uv run python scripts/load_analytics.py --concurrency 50 --total 50 \
+  --auto-approve --output eval/results/analytics-load-50.json
+```
+
+### 四场景演示
+
+```bash
+bash scripts/demo_analytics.sh
+```
+
+1. 正常问答：tenant_a 2026 年 9 月 GMV → SQL + 数值 + 口径。
+2. 歧义澄清：“最近收入怎么样” → 不执行 SQL，只问澄清问题。
+3. 越权：以 tenant_a 身份请求 tenant_b → 拒答。
+4. 高成本：把阈值降到 1 → 无 checkpointer 时 fail-closed，拒绝执行。
+
 ### 复现
 
 ```bash
@@ -466,6 +497,9 @@ uv run python -m eval.run_analytics_eval --arch auto   --limit 50 --auto-approve
 # CI 门禁：单测 + 20 条 smoke + 越权/PII/回归阈值
 bash scripts/ci_analytics.sh
 ```
+
+> 集成测试里的 seed 测试会把数据重置到 `scale=0.01`；跑完先
+> `ANALYTICS_RESET=1 bash scripts/start_analytics_db.sh` 恢复 `scale=1.0`，再跑 50 条 eval。
 
 汇总文件：`eval/analytics_baseline_50.json`、`eval/analytics_ab_summary.json`；完整 trace/报告在本地 `eval/results/`（gitignore）。
 
@@ -498,3 +532,5 @@ bash scripts/ci_analytics.sh
 ## 面试怎么讲
 
 每个主题的 5–8 行口述稿、指标解释和 5 个真实调试故事见 [docs/interview-notes.md](docs/interview-notes.md)。
+
+数据分析 Agent 的 60 秒介绍、A/B 结论、6 个真实调试故事和追问清单见 [docs/interview-notes-analytics.md](docs/interview-notes-analytics.md)。
