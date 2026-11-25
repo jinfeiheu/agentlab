@@ -8,8 +8,9 @@ from agentlab.security.guard import redact_pii
 _INSERT = """
 INSERT INTO analytics.analytics_audit
     (request_id, user_id, tenant_id, question, sql, status,
-     row_count, estimated_cost, duration_ms, approved_by)
-VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+     row_count, estimated_cost, duration_ms, approved_by,
+     prompt_version, model_id)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 ON CONFLICT (request_id) DO UPDATE SET
     user_id = EXCLUDED.user_id,
     tenant_id = EXCLUDED.tenant_id,
@@ -19,7 +20,9 @@ ON CONFLICT (request_id) DO UPDATE SET
     row_count = EXCLUDED.row_count,
     estimated_cost = EXCLUDED.estimated_cost,
     duration_ms = EXCLUDED.duration_ms,
-    approved_by = EXCLUDED.approved_by
+    approved_by = EXCLUDED.approved_by,
+    prompt_version = EXCLUDED.prompt_version,
+    model_id = EXCLUDED.model_id
 """
 
 
@@ -35,6 +38,8 @@ async def write_audit(
     estimated_cost: float = 0.0,
     duration_ms: float = 0.0,
     approved_by: str | None = None,
+    prompt_version: str | None = None,
+    model_id: str | None = None,
 ) -> None:
     """写入审计记录；question/sql 先做 PII 脱敏。"""
     async with await psycopg.AsyncConnection.connect(
@@ -53,5 +58,7 @@ async def write_audit(
                 float(estimated_cost),
                 int(round(duration_ms)),
                 approved_by,
+                prompt_version,
+                model_id,
             ),
         )

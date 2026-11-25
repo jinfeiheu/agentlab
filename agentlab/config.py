@@ -91,3 +91,16 @@ ANALYTICS_COST_THRESHOLD = float(
     os.getenv("ANALYTICS_COST_THRESHOLD", "100000")
 )
 ANALYTICS_TENANT_ID = os.getenv("ANALYTICS_TENANT_ID", "tenant_a")
+# Prompt/模型版本与请求级成本预算。
+ANALYTICS_PROMPT_DIR = Path(
+    os.getenv(
+        "ANALYTICS_PROMPT_DIR",
+        str(PROJECT_ROOT / "configs" / "analytics" / "prompts"),
+    )
+)
+ANALYTICS_REQUEST_BUDGET = float(
+    os.getenv("ANALYTICS_REQUEST_BUDGET", "0.05")
+)
+ANALYTICS_MODEL_CALL_COST = float(
+    os.getenv("ANALYTICS_MODEL_CALL_COST", "0.002")
+)

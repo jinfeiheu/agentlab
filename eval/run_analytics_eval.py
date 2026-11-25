@@ -23,6 +23,7 @@ from agentlab.analytics.multi_agent import (
     build_multi_agent_analytics_graph,
 )
 from agentlab.analytics.routing import build_auto_analytics_graph
+from agentlab.analytics.versioning import build_model_router
 from agentlab.config import ANALYTICS_GOLDEN_PATH
 from agentlab.models import build_chat_model
 
@@ -815,17 +816,22 @@ def main() -> None:
 
         graph_module.COST_THRESHOLD = float("inf")
     model = build_chat_model(temperature=0)
+    model_router = build_model_router(temperature=0)
     db = AnalyticsDB()
     if args.arch == "multi":
         graph = build_multi_agent_analytics_graph(model, db)
     elif args.arch == "auto":
-        single_graph = build_analytics_graph(model, db)
+        single_graph = build_analytics_graph(
+            model, db, model_router=model_router
+        )
         multi_graph = build_multi_agent_analytics_graph(model, db)
         graph = build_auto_analytics_graph(
             model, single_graph, multi_graph
         )
     else:
-        graph = build_analytics_graph(model, db)
+        graph = build_analytics_graph(
+            model, db, model_router=model_router
+        )
     report = asyncio.run(run_eval(items, graph, arch=args.arch))
     print(json.dumps(report["summary"], ensure_ascii=False, indent=2))
     for record in report["records"]:

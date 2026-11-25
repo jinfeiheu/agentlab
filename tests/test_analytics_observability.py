@@ -121,7 +121,8 @@ async def test_analytics_spans_emitted():
 
     await run_analytics_question(graph, "上个月收入", "tenant_a")
 
-    names = {span.name for span in exporter.get_finished_spans()}
+    spans = exporter.get_finished_spans()
+    names = {span.name for span in spans}
     assert {
         "analytics.understand",
         "analytics.plan_sql",
@@ -130,4 +131,9 @@ async def test_analytics_spans_emitted():
         "analytics.approve",
         "analytics.execute",
         "analytics.answer",
+        "analytics.model",
     } <= names
+    model_spans = [span for span in spans if span.name == "analytics.model"]
+    assert model_spans
+    assert model_spans[0].attributes["prompt_version"] == "v1"
+    assert model_spans[0].attributes["model_id"] == "default"

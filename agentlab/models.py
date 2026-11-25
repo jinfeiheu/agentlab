@@ -7,9 +7,13 @@ from langchain_ollama import ChatOllama, OllamaEmbeddings
 from agentlab.config import DEEPSEEK_MODEL, EMBED_MODEL, OLLAMA_BASE_URL
 
 
-def build_chat_model(*, temperature: float = 0) -> ChatDeepSeek:
-    """创建对话模型。"""
-    return ChatDeepSeek(model=DEEPSEEK_MODEL, temperature=temperature)
+def build_chat_model(
+    *, temperature: float = 0, model: str | None = None
+) -> ChatDeepSeek:
+    """创建对话模型；model 为空时使用 DEEPSEEK_MODEL。"""
+    return ChatDeepSeek(
+        model=model or DEEPSEEK_MODEL, temperature=temperature
+    )
 
 
 def build_embeddings() -> OllamaEmbeddings:

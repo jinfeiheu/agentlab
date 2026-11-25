@@ -209,6 +209,8 @@ async def test_graph_writes_audit_on_success(audit_calls):
     assert call["user_id"] == "user_alice"
     assert call["tenant_id"] == "tenant_a"
     assert call["row_count"] == 1
+    assert "understand=v1" in call["prompt_version"]
+    assert "understand=default" in call["model_id"]
 
 
 async def test_graph_writes_audit_on_clarify(audit_calls):

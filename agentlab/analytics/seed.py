@@ -156,8 +156,15 @@ _DDL = (
         estimated_cost NUMERIC(12, 2),
         duration_ms INT,
         approved_by TEXT,
+        prompt_version TEXT,
+        model_id TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )
+    """,
+    """
+    ALTER TABLE analytics.analytics_audit
+        ADD COLUMN IF NOT EXISTS prompt_version TEXT,
+        ADD COLUMN IF NOT EXISTS model_id TEXT
     """,
     """
     CREATE OR REPLACE VIEW analytics.customers_safe

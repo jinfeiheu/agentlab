@@ -1,0 +1,20 @@
+id: repair
+active: v1
+versions:
+  v1:
+    model: default
+    template: |
+      上一条 SQL 执行失败，请修复。
+      只输出修复后的单条只读 PostgreSQL SELECT，必须包含 tenant_id 过滤。
+
+      用户问题：$question
+      失败 SQL：$sql
+      错误：$sql_error
+
+      可用表/视图：
+      $schema_brief
+
+      指标口径：
+      $metric_brief
+
+      $json_sql
