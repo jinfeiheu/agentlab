@@ -103,6 +103,18 @@
 - 取舍：多 Agent 不绑定工具、不做压缩/画像注入，和单 Agent 共享 checkpointer/Store；它不是单 Agent 的替代品。
 - 数字：CLI 实测 supervisor → researcher → writer → critic → __end__，草稿带 `[来源:02-langgraph.md#Checkpointer]`。
 
+## 9.1 数据分析 Agent：single vs multi 的 A/B 结论
+
+- 我先做单 Agent 显式状态机，再做多 Agent：Supervisor → Scout → SQL Analyst → Critic → Reporter，`Command(goto=...)`，`MAX_STEPS=6`。多 Agent 的 Critic 默认 fail-closed，Reporter 不执行 SQL。
+- 50 条 golden（40 answer / 5 clarify / 5 refuse）上做单/多/auto A/B：single 1.000、multi 0.980、auto 1.000；复杂子集都是 17/17。
+- multi 没有提升，但 P95 8.37s → 14.23s（+70%）、平均步骤 0.8 → 3.5、平均成本 ¥0.00558 → ¥0.00638（+14.5%）。所以默认 single，multi 只保留为可选深分析模式。
+- multi 的 0.98 不是“多 Agent 更差”，而是 forced multi 让 Scout 重新判意图，一条“上个月退款情况如何”从 clarify 漂移成 answer；auto 先把 clarify/refuse 留在 single，所以 auto 仍是 1.000。
+- 另一个真实失败：AnswerOutput 解析返回 null，整个请求变成 error。修复是 answer 节点兜底——保留已查到的 result，用确定性文字回答；这比为了“解释好看”丢掉正确答案更合理。
+- 成本守卫：`EXPLAIN` 成本超阈值走 `interrupt`；没有 checkpointer/thread_id 时 fail closed，直接拒绝执行，不静默返回空状态。
+- Prompt 版本放 `configs/analytics/prompts/*.yaml`，每个版本带 model id；审计和 span 都记录 `prompt_version`/`model_id`。回滚只改环境变量 `ANALYTICS_PROMPT_UNDERSTAND_VERSION=v2`，不改代码。
+- 另有请求级模型调用预算（`ANALYTICS_REQUEST_BUDGET` / `ANALYTICS_MODEL_CALL_COST`）：超预算返回可读答案、审计 status=budget，不把预算问题变成 500。
+- 结论：多 Agent 不是默认，是数据证明后的路由选择。要让 multi 成为默认，必须在复杂子集上看到 ≥5 个百分点的提升，并覆盖它增加的延迟/成本。
+
 ## 10. 失败案例(真实调试故事)
 
 ### 10.1 悬空 tool_call 导致 400

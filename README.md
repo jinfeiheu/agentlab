@@ -34,9 +34,19 @@ langchain-demo/
 │   │   ├── knowledge_server.py  # MCP 知识库 server
 │   │   ├── utils_server.py      # MCP 工具 server
 │   │   └── client.py            # 聚合两个 MCP server
+│   ├── analytics/
+│   │   ├── graph.py         # 单 Agent：理解→SQL→守卫→成本→执行→修复→回答
+│   │   ├── multi_agent.py   # Supervisor→Scout→Analyst→Critic→Reporter
+│   │   ├── routing.py       # single/multi/auto 路由
+│   │   ├── sql_guard.py     # sqlglot 只读守卫与 allowlist
+│   │   ├── db.py            # 只读连接、租户上下文、EXPLAIN 成本
+│   │   ├── seed.py          # 合成数仓、指标口径、RLS
+│   │   ├── versioning.py    # prompt/model 版本 registry + 请求预算
+│   │   └── audit.py         # 审计与 PII 脱敏
 │   └── observability/
 │       ├── tracing.py       # OpenTelemetry / OpenInference → Phoenix
 │       └── metrics.py       # token、成本与延迟指标
+├── configs/analytics/prompts/# Analytics prompt 版本 YAML
 ├── data/docs/               # easy 冻结语料:8 篇 / 54 chunks
 ├── data/docs_hard/          # hard 语料:10 篇 / 66 chunks(噪声/冲突/表格)
 ├── eval/                    # golden 集、judge、指标、runner
@@ -45,9 +55,13 @@ langchain-demo/
 │   ├── judge.py             # LLM-as-judge,支持参考答案与跨模型
 │   ├── retrieval_metrics.py
 │   ├── text_metrics.py      # token F1 / Exact Match
-│   └── run_eval.py          # 分层报告与 closed-book 消融
+│   ├── run_eval.py          # 分层报告与 closed-book 消融
+│   ├── analytics_golden.jsonl  # 50 条：40 answer / 5 clarify / 5 refuse
+│   └── run_analytics_eval.py   # single/multi/auto、门禁、轨迹指标
 ├── scripts/
 │   ├── start_db.sh          # 启动 pgvector 并写入 demo 工单
+│   ├── start_analytics_db.sh # Analytics 只读角色 + 合成数仓
+│   ├── ci_analytics.sh      # 单测 + 20 条 smoke + 越权/PII/回归门禁
 │   ├── start_phoenix.sh     # 启动 Phoenix
 │   ├── seed_demo.sql        # users/tickets 种子
 │   └── demo.sh              # 一键演示脚本(见下)
@@ -56,7 +70,7 @@ langchain-demo/
 │   ├── mcp-clients.md       # Claude Desktop/Code/Cursor 配置
 │   ├── results/             # 最终评测矩阵 Markdown 摘要
 │   └── archive/             # 2026-10-20 旧计划与规格
-├── tests/                   # 268 个离线测试,7 个集成测试默认跳过
+├── tests/                   # 402 个离线测试,27 个集成测试默认跳过
 ├── pyproject.toml
 ├── Dockerfile
 ├── docker-compose.yml
@@ -373,6 +387,68 @@ uv run agentlab --multi --user alice
 - 取舍：多 Agent 不绑定工具、不做上下文压缩、不注入用户画像；它适合演示“检索 → 写作 → 审阅”的分工，不适合替代单 Agent 的工具循环。
 - 代码入口：`agentlab/agent/multi_agent.py`、`agentlab/cli.py` 的 `--multi`。
 
+## 数据分析 Agent（Text-to-SQL）
+
+Analytics Agent 是独立于 RAG 主线的第二个作品：面向多租户数仓的自然语言分析，重点不是“生成 SQL”，而是评测、安全、成本与可靠性。
+
+### 架构与安全
+
+- 单 Agent 显式状态机：`understand → clarify/refuse → plan_sql → validate_sql → estimate_cost → approve → execute → repair → answer`。
+- 三层 SQL 安全：`sqlglot` 守卫（单条 SELECT、表 allowlist、默认/最大 LIMIT）、只读角色 `analytics_reader`、PostgreSQL RLS（`SET LOCAL app.tenant_id`）。
+- PII：`customers_safe` 视图（`security_invoker=true`），原始 `customers` 只给列级 SELECT；DB 错误、审计 question/sql、结构化日志统一 `redact_pii`。
+- 成本守卫：`EXPLAIN (FORMAT JSON)` 解析 Total Cost；超阈值触发 `interrupt` 人工审批；没有 checkpointer/thread_id 时 fail closed，不静默返回空结果。
+- 审计：每次公共入口 `run_analytics_question` 写一条 `analytics_audit`，`request_id` 关联 trace/metrics。
+- 多 Agent（非默认）：Supervisor → Scout → SQL Analyst → Critic → Reporter，`Command(goto=...)` 路由，`MAX_STEPS=6`。Scout 产出 `schema_brief`，Analyst 产出 `sql/result`，Critic 只评审不执行 SQL，Reporter 只读结果；Critic 失败默认不通过，重复 SQL 会被检测并停止重试。
+
+### Prompt/模型版本与预算
+
+- Prompt 模板与版本在 `configs/analytics/prompts/*.yaml`：每个 prompt 有 `active` 版本，每个版本可指定 `model` id；运行时由 `PromptRegistry` 读取。
+- 回滚不改代码：`ANALYTICS_PROMPT_UNDERSTAND_VERSION=v2` 覆盖 active 版本，或在构造 `PromptRegistry(overrides=...)` 时指定。
+- 模型路由按 YAML 的 model id 取模型并缓存；`default` 表示 `DEEPSEEK_MODEL`。
+- 每次模型调用把 `prompt_id/version/model_id` 写入 span；`run_analytics_question` 把汇总写进 `analytics_audit.prompt_version` / `model_id`。
+- 请求级模型调用预算：`ANALYTICS_REQUEST_BUDGET` + `ANALYTICS_MODEL_CALL_COST`。超预算返回可读答案（“本次分析超出成本预算…”），审计 status=`budget`，不抛 500。
+- 当前 registry 覆盖默认单 Agent 的 understand/plan_sql/repair/answer；multi 的 Scout/Critic/Reporter prompt 仍是代码内常量，等 multi 成为默认或需要灰度时再迁入。
+
+### 评测集与指标
+
+- 50 条 golden：40 可回答 / 5 歧义 / 5 不可回答，覆盖 join、聚合、窗口、时间、退款、权限、PII、昂贵查询。
+- 结果归一化：行顺序无关、数值 `rel_tol=1e-9 + abs_tol=0.01`、空值与重复行严格计数。
+- 指标：`task_success`、`execution_accuracy`、clarification/refusal rate、P50/P95、真实 token/成本、`route_accuracy`、`plan_validity`、`avg_step_count`、Critic 拦截率、9 类 failure class 与恢复率。
+- CI：`scripts/ci_analytics.sh` 跑全量单测 + 20 条 smoke；越权 >0、PII >0、task_success 回退 >3% 都会失败。
+
+### single vs multi vs auto（50 条）
+
+成本按真实 token、¥2/百万 token 混合单价估算。“复杂子集”= tags 含 `join`/`window`/`expensive` 的 17 条。
+
+| 架构 | task_success | 复杂子集 | P95 | 平均成本/题 | 平均 token | 平均步骤 | Critic 拦截率 | 路由 single/multi |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| single | 1.000 | 17/17 | 8.37s | ¥0.00558 | 2788 | 0.8 | — | 50 / 0 |
+| multi | 0.980 | 17/17 | 14.23s | ¥0.00638 | 3192 | 3.5 | 2.4% | 0 / 50 |
+| auto | 1.000 | 17/17 | 9.77s | ¥0.00552 | 2761 | 0.86 | 0% | 49 / 1 |
+
+**结论：多 Agent 不是默认，是数据证明后的路由选择。**
+
+- multi 在复杂子集上没有提升（1.000 vs 1.000），但 P95 +70%、平均步骤 0.8→3.5、成本 +14.5%，因此默认 single。
+- forced multi 的 0.98 来自一条歧义题被 Scout 误判为 answer；auto 在进入 multi 前先用同一意图解析器把 clarify/refuse 留在 single，所以 auto 仍为 1.000。
+- auto 只把 1/50 路由到 multi，成功率和 single 相同；它保留为路由实验入口，暂不设为默认。
+- multi 保留为可选深分析模式：适合需要显式 Scout/Critic 轨迹、或未来接入多步计划执行的场景。
+
+### 复现
+
+```bash
+bash scripts/start_analytics_db.sh
+
+# 50 条 single / multi / auto；--auto-approve 只用于评测昂贵查询
+uv run python -m eval.run_analytics_eval --arch single --limit 50 --auto-approve
+uv run python -m eval.run_analytics_eval --arch multi  --limit 50 --auto-approve
+uv run python -m eval.run_analytics_eval --arch auto   --limit 50 --auto-approve
+
+# CI 门禁：单测 + 20 条 smoke + 越权/PII/回归阈值
+bash scripts/ci_analytics.sh
+```
+
+汇总文件：`eval/analytics_baseline_50.json`、`eval/analytics_ab_summary.json`；完整 trace/报告在本地 `eval/results/`（gitignore）。
+
 ## 已知限制与下一步
 
 1. **hard 标签由实现者生成**，未做多人标注/仲裁；reference_answer 和 relevant_chunk_ids 有主观性，样本量 100 仍不足以给出窄置信区间。
@@ -382,9 +458,13 @@ uv run agentlab --multi --user alice
 5. **Token F1/EM 不适合作为主指标**：参考答案较长、回答措辞自由，词面指标天然偏低。
 6. **InMemory 与 Postgres 行为不同**：InMemoryStore 无 TTL；CLI 的长期记忆只在进程内；跨重启需要 API + `USE_DB=true`。
 7. **`--simple`/`--multi` 功能不完整**：缺少压缩、画像注入或工具绑定；这是有意的取舍。
-8. **生产化缺口**：demo 用户/JWT/限流/MCP HTTP 鉴权都需要替换；没有 CI、分布式锁、密钥轮换和真正的监控告警。
+8. **生产化缺口**：demo 用户/JWT/限流/MCP HTTP 鉴权都需要替换；仓库没有 GitHub Actions（Analytics 只有本地 `scripts/ci_analytics.sh`），也缺分布式锁、密钥轮换和真正的监控告警。
+9. **Analytics golden 绑定合成数据**：50 条 expected_result 绑定 `scale=1.0` 的固定 seed；换数仓、改口径或重新灌数都要重算，不能直接当生产回归集。
+10. **多步计划尚未接线**：`planning`/`verification`/`executor` 已有库级测试，但默认图仍是单 SQL；因此 `plan_validity`/`step_count` 对 single 是单步基线，`unnecessary_steps` 只统计重复 SQL。
+11. **auto 路由是启发式**：按 metrics/dimensions/关键词判断，50 条里只把 1 条路由到 multi；需要更多复杂样本校准阈值，否则“多 Agent 路由”可能只是名义上的。
+12. **Analytics 尚无语义层/数仓适配器**：指标口径写在 `catalog.py`，没有 dbt/Semantic Layer 或 MySQL/BigQuery 方言适配；下一步是 metric catalog 版本化、BIRD/Spider 子集和客服 domain adapter。
 
-下一步优先级：多人标注 hard 集并计算置信区间 → 固定生成结果后做 judge 一致性研究 → 引入上下文 precision/recall 的 retrieval 诊断 → 把 MCP HTTP 放到带 TLS/Bearer 的网关后。
+下一步优先级：多人标注 hard 集并计算置信区间 → 固定生成结果后做 judge 一致性研究 → 引入上下文 precision/recall 的 retrieval 诊断 → 把 MCP HTTP 放到带 TLS/Bearer 的网关后 → Analytics 接多步计划执行与语义层。
 
 ## 常见问题
 
