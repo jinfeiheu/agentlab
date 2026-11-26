@@ -22,7 +22,7 @@ bash scripts/ci_analytics.sh   # 单测 + 20 条 smoke + 越权/PII/回归门禁
 
 ## 第二作品：Conversational / RAG Agent
 
-tool-calling + hybrid retrieval（BM25 + 向量 + RRF + rerank）+ MCP + 长期记忆 + JWT/SSE；easy/hard 两套冻结评测和 closed-book 消融。它也是 Analytics API 的基础设施来源（auth / SSE / guard / tracing）。
+tool-calling + hybrid retrieval（BM25 + 向量 + RRF + rerank）+ MCP + 长期记忆 + JWT/SSE；easy/hard 两套冻结评测和 closed-book 消融。它和 Analytics 线共享 auth / streaming / guard / tracing 模块；Analytics API 不依赖 `rag_agent` 包。
 
 ### 5 分钟阅读路径
 
@@ -37,97 +37,85 @@ tool-calling + hybrid retrieval（BM25 + 向量 + RRF + rerank）+ MCP + 长期�
 ```
 agentlab/
 ├── agentlab/
-│   ├── cli.py               # CLI:手写图 / --simple / --multi / --user
-│   ├── config.py            # 全部环境变量与项目路径
-│   ├── models.py            # 对话、嵌入、裁判、fallback 模型工厂
-│   ├── api/
-│   │   ├── app.py           # FastAPI:JWT、限流、SSE、HITL resume、健康检查
-│   │   ├── analytics.py     # Analytics API:会话、计划事件、取消
+│   ├── __main__.py              # python -m agentlab -> rag_agent.cli
+│   ├── config.py                # 环境变量与项目路径（两条线共享）
+│   ├── models.py                # 对话/嵌入/裁判模型工厂（共享）
+│   ├── analytics/               # 产品一：Text-to-SQL 数据问答
+│   │   ├── graph.py             # 单 Agent：理解→SQL→守卫→成本→执行→修复→回答
+│   │   ├── multi_agent.py       # Supervisor→Scout→Analyst→Critic→Reporter
+│   │   ├── routing.py           # single/multi/auto 路由
+│   │   ├── sql_guard.py         # sqlglot 只读守卫与 allowlist
+│   │   ├── db.py                # 只读连接、租户上下文、EXPLAIN 成本
+│   │   ├── seed.py              # 合成数仓、指标口径、RLS
+│   │   ├── planning.py          # 多步计划/校验
+│   │   ├── verification.py      # 步骤验收、失败分类、重规划
+│   │   ├── executor.py          # 并行步骤执行、预算与取消
+│   │   ├── versioning.py        # prompt/model 版本 registry + 请求预算
+│   │   ├── session.py           # 多轮会话上下文与压缩
+│   │   ├── cli.py               # agentlab-analytics
+│   │   └── audit.py             # 审计与 PII 脱敏
+│   ├── rag_agent/               # 产品二：RAG / Conversational Agent
+│   │   ├── graph.py             # 单 Agent 图：压缩 → agent ⇄ tools
+│   │   ├── multi_agent.py       # Supervisor：researcher/writer/critic
+│   │   ├── memory.py            # 结构化长期记忆、画像、episode、TTL
+│   │   ├── context.py           # token 估算、裁剪、压缩、摘要
+│   │   ├── cli.py               # agentlab / agentlab-rag
+│   │   ├── rag/                 # loaders / retrieval / ingest
+│   │   ├── tools/               # calculator / search_docs / tickets
+│   │   └── mcp/                 # knowledge / utils server + client
+│   ├── api/                     # API 组装层
+│   │   ├── app.py               # create_app / lifespan / login / healthz / static
+│   │   ├── deps.py              # 鉴权、服务访问、限流、线程锁
+│   │   ├── streaming.py         # 共享 SSE 原语
+│   │   ├── redaction.py         # 共享递归脱敏
+│   │   ├── auth_schemas.py      # 登录请求/响应
+│   │   ├── rag_agent/           # /chat* 路由、SSE、services、schemas
+│   │   ├── analytics/           # /analytics/* 路由、events、services、schemas
 │   │   └── static/
-│   │       ├── index.html   # 最小网页客户端
-│   │       └── analytics.html # 表格 + 简单图 + 计划步骤
-│   ├── agent/
-│   │   ├── graph.py         # 单 Agent 图:压缩 → agent ⇄ tools
-│   │   ├── multi_agent.py   # Supervisor 多 Agent:researcher/writer/critic
-│   │   ├── memory.py        # 结构化长期记忆、画像、episode、TTL
-│   │   └── context.py       # token 估算、裁剪、压缩、摘要
-│   ├── rag/
-│   │   ├── loaders.py       # Markdown 加载、标题切分、稳定 chunk_id
-│   │   ├── retrieval.py     # 混合检索(BM25 + 向量 + RRF)、rerank、引用抽取
-│   │   └── ingest.py        # easy/hard 语料到 pgvector
-│   ├── tools/
-│   │   ├── builtin.py       # calculator / search_docs / send_report
-│   │   └── tickets.py       # 私有工单查询与跨用户隔离
-│   ├── security/
-│   │   ├── auth.py          # demo 用户、HS256 JWT、UserContext
-│   │   └── guard.py         # 注入检测、PII 脱敏、工具白名单
-│   ├── mcp/
-│   │   ├── knowledge_server.py  # MCP 知识库 server
-│   │   ├── utils_server.py      # MCP 工具 server
-│   │   └── client.py            # 聚合两个 MCP server
-│   ├── analytics/
-│   │   ├── graph.py         # 单 Agent：理解→SQL→守卫→成本→执行→修复→回答
-│   │   ├── multi_agent.py   # Supervisor→Scout→Analyst→Critic→Reporter
-│   │   ├── routing.py       # single/multi/auto 路由
-│   │   ├── sql_guard.py     # sqlglot 只读守卫与 allowlist
-│   │   ├── db.py            # 只读连接、租户上下文、EXPLAIN 成本
-│   │   ├── seed.py          # 合成数仓、指标口径、RLS
-│   │   ├── planning.py      # 多步计划/校验
-│   │   ├── verification.py  # 步骤验收、失败分类、重规划
-│   │   ├── executor.py      # 并行步骤执行、预算与取消
-│   │   ├── versioning.py    # prompt/model 版本 registry + 请求预算
-│   │   ├── session.py       # 多轮会话上下文与压缩
-│   │   ├── cli.py           # agentlab-analytics
-│   │   └── audit.py         # 审计与 PII 脱敏
-│   └── observability/
-│       ├── tracing.py       # OpenTelemetry / OpenInference → Phoenix
-│       └── metrics.py       # token、成本与延迟指标
-├── configs/analytics/prompts/# Analytics prompt 版本 YAML
-├── data/docs/               # easy 冻结语料:8 篇 / 54 chunks
-├── data/docs_hard/          # hard 语料:10 篇 / 66 chunks(噪声/冲突/表格)
-├── eval/                    # golden 集、judge、指标、runner
-│   ├── golden.jsonl         # easy:27 条(4 条不可回答)
-│   ├── golden_hard.jsonl    # hard:100 条(六类)
-│   ├── judge.py             # LLM-as-judge,支持参考答案与跨模型
+│   │       ├── rag_agent.html   # 对话页
+│   │       └── analytics.html   # 表格 + 简单图 + 计划步骤
+│   ├── security/                # 共享：JWT、注入检测、PII、工具白名单
+│   └── observability/           # 共享：OTel/Phoenix、token/成本/延迟指标
+├── configs/analytics/prompts/   # Analytics prompt 版本 YAML
+├── data/docs/                   # easy 冻结语料：8 篇 / 54 chunks
+├── data/docs_hard/              # hard 语料：10 篇 / 66 chunks
+├── eval/                        # golden 集、judge、指标、runner
+│   ├── golden.jsonl             # easy：27 条
+│   ├── golden_hard.jsonl        # hard：100 条
+│   ├── judge.py                 # LLM-as-judge
 │   ├── retrieval_metrics.py
-│   ├── text_metrics.py      # token F1 / Exact Match
-│   ├── run_eval.py          # 分层报告与 closed-book 消融
-│   ├── analytics_golden.jsonl  # 50 条：40 answer / 5 clarify / 5 refuse
-│   └── run_analytics_eval.py   # single/multi/auto、门禁、轨迹指标
+│   ├── text_metrics.py          # token F1 / Exact Match
+│   ├── run_eval.py              # 分层报告与 closed-book 消融
+│   ├── analytics_golden.jsonl   # 50 条：40 answer / 5 clarify / 5 refuse
+│   └── run_analytics_eval.py    # single/multi/auto、门禁、轨迹指标
 ├── scripts/
-│   ├── start_db.sh          # 启动 pgvector 并写入 demo 工单
-│   ├── start_analytics_db.sh # Analytics 只读角色 + 合成数仓
-│   ├── ci_analytics.sh      # 单测 + 20 条 smoke + 越权/PII/回归门禁
-│   ├── load_analytics.py    # 20/50 并发压测
-│   ├── demo_analytics.sh    # 正常/澄清/越权/高成本四场景
-│   ├── start_phoenix.sh     # 启动 Phoenix
-│   ├── seed_demo.sql        # users/tickets 种子
-│   └── demo.sh              # 一键演示脚本(见下)
-├── docs/
-│   ├── CHANGELOG.md         # 按里程碑的演进摘要
-│   ├── interview-notes.md   # 面试口述稿与真实调试故事
-│   ├── interview-notes-analytics.md # 数据分析 Agent 口述稿
-│   ├── runbook-analytics.md # SLI/SLO、告警、故障处理、回滚
-│   ├── mcp-clients.md       # Claude Desktop/Code/Cursor 配置
-│   ├── results/             # 最终评测矩阵 Markdown 摘要
-│   └── archive/             # 2026-10-20 旧计划与规格
-├── tests/                   # 425 个离线测试,27 个集成测试默认跳过
+│   ├── start_db.sh              # 启动 pgvector 并写入 demo 工单
+│   ├── start_analytics_db.sh    # Analytics 只读角色 + 合成数仓
+│   ├── ci_analytics.sh          # 单测 + 20 条 smoke + 门禁
+│   ├── load_analytics.py        # 20/50 并发压测
+│   ├── demo_analytics.sh        # 四场景演示
+│   ├── start_phoenix.sh         # 启动 Phoenix
+│   ├── seed_demo.sql            # users/tickets 种子
+│   └── demo.sh                  # 一键演示
+├── docs/                        # ADR、runbook、面试稿、CHANGELOG、结果
+├── tests/                       # 458 collected / 431 passed / 27 skipped
 ├── pyproject.toml
 ├── Dockerfile
 ├── docker-compose.yml
 └── .env.example
+
 ```
 
 ## 架构
 
 ```
                     ┌──────────────────────────────┐
-用户 ── CLI agentlab/cli.py │ 手写 StateGraph / create_agent │
+用户 ── CLI agentlab/rag_agent/cli.py │ 手写 StateGraph / create_agent │
    │   --multi      │ Supervisor 多 Agent           │
    │                └──────────────┬───────────────┘
    │                               │
    └─ 浏览器 → FastAPI agentlab/api/app.py │  JWT / 限流 / SSE / HITL
-        (static/index.html)        │
+        (static/rag_agent.html)        │
                                    ▼
                     ┌──────────────────────────────┐
                     │ compact → agent ⇄ tools      │
@@ -145,7 +133,7 @@ agentlab/
                                             ▼
                     Postgres: checkpoints / Store / tickets / docs
                     OTel/OpenInference → Phoenix (http://localhost:6006)
-                    MCP servers: agentlab/mcp/knowledge_server.py + utils_server.py
+                    MCP servers: agentlab/rag_agent/mcp/knowledge_server.py + utils_server.py
 ```
 
 ## 快速开始
@@ -170,11 +158,11 @@ ollama pull bge-m3
 bash scripts/start_db.sh
 
 # 把 easy 语料切成 54 个 chunk 写入 docs collection
-uv run python -m agentlab.rag.ingest --reset
+uv run python -m agentlab.rag_agent.rag.ingest --reset
 
 # 离线测试(不需要网络/API Key/数据库)
 uv run pytest -q
-# 268 passed, 7 skipped
+# 431 passed, 27 skipped
 
 # 启动 CLI
 uv run agentlab
@@ -184,6 +172,7 @@ uv run agentlab
 
 ```bash
 uv run agentlab                       # 手写 StateGraph
+uv run agentlab-rag                   # 显式命令（等价于 agentlab）
 uv run agentlab --simple              # create_agent 高层封装
 uv run agentlab --multi --user alice  # Supervisor 多 Agent
 uv run agentlab --user bob            # 切换 demo 用户
@@ -236,7 +225,7 @@ TRACING_ENABLED=true USE_DB=true uv run uvicorn agentlab.api.app:app --port 8000
 
 ```bash
 # 默认 stdio：客户端拉起两个 server 子进程
-uv run python -m agentlab.mcp.client
+uv run python -m agentlab.rag_agent.mcp.client
 # 工具: ['calculator', 'doc_stats', 'list_sources', 'search_docs', 'word_count']
 
 # API 通过 MCP 使用公共检索/计算工具(仍保留本地 ticket/memory/send_report)
@@ -271,7 +260,7 @@ bash scripts/demo.sh
 - **取舍**：限流是进程内内存计数，不是分布式；超时用 `asyncio.wait_for`；中断后若用户直接发新消息，`_prepare_thread` 会修复/重置悬空 tool_call，优先保证不 400。
 - **指标/验证**：重启 API 后同一 session_id 能继续；SSE 的 tool_call/tool_result 用 id 配对；HITL 确认/取消可用。
 - **失败模式**：中断/并发会留下 assistant tool_calls 没有对应 ToolMessage，LangGraph 会报 400；现在每轮前补齐或重置。
-- **代码入口**：`agentlab/api/app.py`、`agentlab/security/auth.py`、`scripts/start_db.sh`、`agentlab/api/static/index.html`。
+- **代码入口**：`agentlab/api/app.py`、`agentlab/security/auth.py`、`scripts/start_db.sh`、`agentlab/api/static/rag_agent.html`。
 
 ### 阶段 3：RAG 升级
 
@@ -280,7 +269,7 @@ bash scripts/demo.sh
 - **取舍**：cross-encoder 在 CPU 上让 p50 增加约 0.7–1.4 秒(hard 约 0.75 秒，easy 约 1.35 秒)；LLM rerank 保留为可选第二层，默认关闭；rerank 只作用于 agent 的工具证据，预取检索指标不经过 rerank，因此 R@3/MRR 在 hybrid 与 hybrid+rerank 之间相同。
 - **指标**：easy baseline → hybrid+rerank：R@3 0.8696 → 0.9130，MRR 0.8188 → 0.8623，nDCG@3 0.8081 → 0.8462；hard baseline → hybrid+rerank：answerable_success 0.8118 → 0.8588，MRR 0.8490 → 0.8878。rerank 在本轮 hard 上没有提升 task_success(0.83 vs hybrid 0.86)，但 citation_precision 从 0.9294 提升到 0.9412，代价是 p50 增加约 0.75 秒。
 - **失败模式**：中文长表格仍可能被 chunk 边界截断；hard 集的多跳和歧义题暴露召回与聚合不足。
-- **代码入口**：`agentlab/rag/ingest.py`、`agentlab/rag/retrieval.py`、`agentlab/rag/loaders.py`、`agentlab/tools/builtin.py`、`eval/retrieval_metrics.py`。
+- **代码入口**：`agentlab/rag_agent/rag/ingest.py`、`agentlab/rag_agent/rag/retrieval.py`、`agentlab/rag_agent/rag/loaders.py`、`agentlab/rag_agent/tools/builtin.py`、`eval/retrieval_metrics.py`。
 
 ### 阶段 4：MCP、安全、记忆、多 Agent
 
@@ -293,7 +282,7 @@ bash scripts/demo.sh
 - **取舍**：多 Agent 不绑定工具、不做压缩/画像注入，换来清晰的路由与更低的实现复杂度；自动记忆默认关闭，避免每轮多一次模型调用；`--simple` 也不做压缩/画像。
 - **指标**：hard closed-book 消融的 answerable_success 为 0.0353，对比 open-book baseline 的 0.8118；task_success 为 0.12 vs 0.83(两者定义不同，见指标说明)。MCP 发现 5 个工具并成功调用；跨用户 ticket/memory 测试通过。
 - **失败模式**：hard 集的歧义题经常选择“请求澄清”而不是列出多种解释，judge 按参考答案只给部分分；qwen3.5:4b 裁判有 1 条缺 `reason` 的解析失败，走了安全默认。
-- **代码入口**：`agentlab/mcp/knowledge_server.py`、`agentlab/mcp/utils_server.py`、`agentlab/mcp/client.py`、`agentlab/security/guard.py`、`agentlab/tools/tickets.py`、`agentlab/agent/memory.py`、`agentlab/agent/context.py`、`agentlab/agent/multi_agent.py`。
+- **代码入口**：`agentlab/rag_agent/mcp/knowledge_server.py`、`agentlab/rag_agent/mcp/utils_server.py`、`agentlab/rag_agent/mcp/client.py`、`agentlab/security/guard.py`、`agentlab/rag_agent/tools/tickets.py`、`agentlab/rag_agent/memory.py`、`agentlab/rag_agent/context.py`、`agentlab/rag_agent/multi_agent.py`。
 
 ## 评测方法与结果
 
@@ -384,7 +373,7 @@ uv run python -m eval.run_eval --corpus hard --limit 3
 hard 语料首次评测前需要摄入：
 
 ```bash
-uv run python -m agentlab.rag.ingest --docs-dir data/docs_hard --collection docs_hard --reset
+uv run python -m agentlab.rag_agent.rag.ingest --docs-dir data/docs_hard --collection docs_hard --reset
 ```
 
 ## 安全模型
@@ -426,7 +415,7 @@ uv run agentlab --multi --user alice
 - 节点：researcher 检索写 research_notes；writer 基于笔记生成带引用的 draft；critic 用结构化输出判断是否忠实；supervisor 用 `Command(goto=...)` 路由。
 - 上限：`MAX_STEPS=6`；critic 判定不忠实且未到上限时回到 writer；critic 调用失败默认 faithful=true。
 - 取舍：多 Agent 不绑定工具、不做上下文压缩、不注入用户画像；它适合演示“检索 → 写作 → 审阅”的分工，不适合替代单 Agent 的工具循环。
-- 代码入口：`agentlab/agent/multi_agent.py`、`agentlab/cli.py` 的 `--multi`。
+- 代码入口：`agentlab/rag_agent/multi_agent.py`、`agentlab/rag_agent/cli.py` 的 `--multi`。
 
 ## 数据分析 Agent（Text-to-SQL）
 
@@ -511,7 +500,7 @@ uv run agentlab-api
 
 SLO：成功率 ≥99%、P95 ≤12s、单任务成本 ≤¥0.02、50 条 task_success ≥85%、越权 0、PII 0、审计覆盖 100%。详细告警与故障处理见 [runbook-analytics.md](docs/runbook-analytics.md)。
 
-最终验收：425 单测 + 27 集成全绿；50 条 eval `task_success=1.0`、P95 8.31s、平均成本 ¥0.00561、越权 0、PII 0；审计 50/50（40 success / 5 clarify / 5 refuse）。汇总见 `eval/analytics_final_acceptance.json`。
+最终验收：431 单测 + 27 集成全绿；50 条 eval `task_success=1.0`、P95 8.31s、平均成本 ¥0.00561、越权 0、PII 0；审计 50/50（40 success / 5 clarify / 5 refuse）。汇总见 `eval/analytics_final_acceptance.json`。
 
 ```bash
 uv run python scripts/load_analytics.py --concurrency 50 --total 50 \
@@ -571,7 +560,7 @@ bash scripts/ci_analytics.sh
 - **Ollama connection refused**：先 `ollama serve`，再 `ollama pull bge-m3`；首次 rerank 会下载 `BAAI/bge-reranker-v2-m3`。
 - **Postgres 连接失败/健康检查 503**：运行 `bash scripts/start_db.sh`；hard 评测还要先摄入 `docs_hard`。
 - **Phoenix 看不到 trace**：确认 `TRACING_ENABLED=true`、Phoenix 在 6006、进程退出时调用了 `shutdown_tracing`；API 只在真实启动(未注入 fake services)时初始化 tracing。
-- **MCP 启动失败**：`USE_MCP=true` 要求两个 server 都可用且提供 `search_docs`+`calculator`；先单独跑 `uv run python -m agentlab.mcp.client`。
+- **MCP 启动失败**：`USE_MCP=true` 要求两个 server 都可用且提供 `search_docs`+`calculator`；先单独跑 `uv run python -m agentlab.rag_agent.mcp.client`。
 - **评测结果和 README 不完全一样**：模型输出有随机性；本 README 记录的是 2026-10-24 的具体运行。最终矩阵的 Markdown 摘要见 `docs/results/`，原始 JSON 在本地 `eval/results/`（被 gitignore）。
 
 ## 面试怎么讲

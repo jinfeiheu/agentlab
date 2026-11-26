@@ -4,10 +4,10 @@
 
 | server | 模块 | 工具 |
 |---|---|---|
-| `agentlab` | `agentlab.mcp.knowledge_server` | `search_docs`、`list_sources`、`doc_stats` |
-| `utils` | `agentlab.mcp.utils_server` | `calculator`、`word_count` |
+| `agentlab` | `agentlab.rag_agent.mcp.knowledge_server` | `search_docs`、`list_sources`、`doc_stats` |
+| `utils` | `agentlab.rag_agent.mcp.utils_server` | `calculator`、`word_count` |
 
-`agentlab.mcp.client` 会同时连接两个 server 并聚合工具。项目 API 用 `USE_MCP=true` 启用聚合工具。
+`agentlab.rag_agent.mcp.client` 会同时连接两个 server 并聚合工具。项目 API 用 `USE_MCP=true` 启用聚合工具。
 
 ## stdio（本地，默认）
 
@@ -20,12 +20,12 @@ Claude Desktop 的 `claude_desktop_config.json`、Claude Code 的项目 `.mcp.js
   "mcpServers": {
     "agentlab": {
       "command": "uv",
-      "args": ["run", "python", "-m", "agentlab.mcp.knowledge_server"],
+      "args": ["run", "python", "-m", "agentlab.rag_agent.mcp.knowledge_server"],
       "cwd": "/home/jinfei/cc_test/langchain-demo"
     },
     "utils": {
       "command": "uv",
-      "args": ["run", "python", "-m", "agentlab.mcp.utils_server"],
+      "args": ["run", "python", "-m", "agentlab.rag_agent.mcp.utils_server"],
       "cwd": "/home/jinfei/cc_test/langchain-demo"
     }
   }
@@ -35,7 +35,7 @@ Claude Desktop 的 `claude_desktop_config.json`、Claude Code 的项目 `.mcp.js
 命令行验证：
 
 ```bash
-uv run python -m agentlab.mcp.client
+uv run python -m agentlab.rag_agent.mcp.client
 # 工具: ['calculator', 'doc_stats', 'list_sources', 'search_docs', 'word_count']
 ```
 
@@ -44,17 +44,17 @@ uv run python -m agentlab.mcp.client
 server 作为独立服务运行，客户端通过 URL 连接。先启动两个终端：
 
 ```bash
-uv run python -m agentlab.mcp.knowledge_server --transport streamable-http --host 0.0.0.0 --port 8811
-uv run python -m agentlab.mcp.utils_server --transport streamable-http --host 0.0.0.0 --port 8812
+uv run python -m agentlab.rag_agent.mcp.knowledge_server --transport streamable-http --host 0.0.0.0 --port 8811
+uv run python -m agentlab.rag_agent.mcp.utils_server --transport streamable-http --host 0.0.0.0 --port 8812
 ```
 
 LangChain 客户端：
 
 ```bash
-MCP_TRANSPORT=streamable_http uv run python -m agentlab.mcp.client
+MCP_TRANSPORT=streamable_http uv run python -m agentlab.rag_agent.mcp.client
 ```
 
-`agentlab.mcp.client.build_mcp_config()` 会生成：
+`agentlab.rag_agent.mcp.client.build_mcp_config()` 会生成：
 
 ```python
 {

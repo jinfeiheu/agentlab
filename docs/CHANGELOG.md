@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-26 — 包结构分层
+
+- RAG 线整体迁入 `agentlab/rag_agent/`；`api/` 拆成组装根 + `api/rag_agent/` + `api/analytics/`。
+- 共享 `api/streaming.py`、`api/redaction.py`、`api/deps.py`、`api/auth_schemas.py`。
+- 新增 `agentlab-rag` 命令，`agentlab` 保留为兼容别名；静态页改名 `rag_agent.html`。
+- 路由、SSE 事件名、CLI 行为、MCP 工具名不变；431 passed / 27 skipped。
+
 ## 2026-11-26 — 多步计划执行（实验）
 
 - `--plan` SQL-in-plan：规划器产出带 SQL 的 DAG，sqlguard 校验后由 `execute_plan` 并行执行。

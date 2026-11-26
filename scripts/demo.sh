@@ -65,8 +65,8 @@ bash scripts/start_db.sh
 
 step "5/9 摄入语料" \
   "easy：data/docs -> docs(54 chunks)；hard：data/docs_hard -> docs_hard(66 chunks)。"
-uv run python -m agentlab.rag.ingest --reset
-uv run python -m agentlab.rag.ingest --docs-dir data/docs_hard --collection docs_hard --reset
+uv run python -m agentlab.rag_agent.rag.ingest --reset
+uv run python -m agentlab.rag_agent.rag.ingest --docs-dir data/docs_hard --collection docs_hard --reset
 
 step "6/9 快速评测" \
   "跑 3 条 hard 问题，验证检索、judge、分层报告和成本统计；会调用 DeepSeek。"
@@ -79,7 +79,7 @@ fi
 
 step "7/9 MCP 工具发现" \
   "启动两个 stdio MCP server，聚合 search_docs/list_sources/doc_stats/calculator/word_count。"
-timeout 120 uv run python -m agentlab.mcp.client
+timeout 120 uv run python -m agentlab.rag_agent.mcp.client
 
 step "8/9 Supervisor 多 Agent CLI" \
   "自动输入一个问题后退出：观察 supervisor -> researcher -> writer -> critic 的路由。"
@@ -117,5 +117,5 @@ printf '更多命令：\n'
 printf '  CLI:        uv run agentlab [--simple|--multi --user alice]\n'
 printf '  Phoenix:    bash scripts/start_phoenix.sh  (另开终端)\n'
 printf '  评测矩阵:   uv run python -m eval.run_eval --corpus hard --retriever hybrid --rerank\n'
-printf '  MCP HTTP:   uv run python -m agentlab.mcp.knowledge_server --transport streamable-http --port 8811\n'
+printf '  MCP HTTP:   uv run python -m agentlab.rag_agent.mcp.knowledge_server --transport streamable-http --port 8811\n'
 printf '  Analytics:  bash scripts/demo_analytics.sh\n'

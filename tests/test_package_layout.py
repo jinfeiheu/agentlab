@@ -178,3 +178,23 @@ def _moved_import_offenders(root: Path) -> list[str]:
 
 def test_no_legacy_moved_imports():
     assert _moved_import_offenders(PROJECT_ROOT) == []
+
+    checks = {
+        Path("scripts/demo.sh"): ("agentlab.rag.ingest", "agentlab.mcp."),
+        Path("README.md"): (
+            "agentlab/agent/",
+            "agentlab/rag/",
+            "agentlab/tools/",
+            "agentlab/mcp/",
+            "agentlab/cli.py",
+            "agentlab/api/static/index.html",
+        ),
+        Path("docs/mcp-clients.md"): ("agentlab.mcp.",),
+    }
+    offenders = []
+    for path, needles in checks.items():
+        text = path.read_text(encoding="utf-8")
+        for needle in needles:
+            if needle in text:
+                offenders.append(f"{path}: {needle}")
+    assert offenders == []
