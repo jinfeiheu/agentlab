@@ -10,7 +10,7 @@ from langchain_core.messages import BaseMessage
 from langchain_core.tools import tool
 from langgraph.prebuilt import ToolRuntime
 
-from agentlab.agent.context import summarize_messages
+from agentlab.rag_agent.context import summarize_messages
 from agentlab.config import MEMORY_EPISODE_TTL_DAYS
 from agentlab.security.auth import UserContext
 

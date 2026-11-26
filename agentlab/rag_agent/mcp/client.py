@@ -17,13 +17,13 @@ MCP_SERVER_CONFIG = {
     "agentlab": {
         "transport": "stdio",
         "command": sys.executable,
-        "args": ["-m", "agentlab.mcp.knowledge_server"],
+        "args": ["-m", "agentlab.rag_agent.mcp.knowledge_server"],
         "cwd": str(PROJECT_ROOT),
     },
     "utils": {
         "transport": "stdio",
         "command": sys.executable,
-        "args": ["-m", "agentlab.mcp.utils_server"],
+        "args": ["-m", "agentlab.rag_agent.mcp.utils_server"],
         "cwd": str(PROJECT_ROOT),
     },
 }

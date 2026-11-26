@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-from agentlab.tools import tickets
+from agentlab.rag_agent.tools import tickets
 from agentlab.security.auth import UserContext
 from tests.fakes import FakeRuntime
 

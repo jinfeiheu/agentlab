@@ -2,7 +2,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.store.memory import InMemoryStore
 
 from agentlab.security.auth import UserContext
-from agentlab.agent.memory import (
+from agentlab.rag_agent.memory import (
     MemoryItem,
     detect_memory_candidate,
     extract_memories,

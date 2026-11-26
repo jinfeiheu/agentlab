@@ -1,7 +1,7 @@
 from langchain_core.documents import Document
 
 from agentlab.config import DOCS_DIR
-from agentlab.rag.loaders import (
+from agentlab.rag_agent.rag.loaders import (
     build_inmemory_retriever,
     format_docs,
     load_documents,

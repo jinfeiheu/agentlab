@@ -1,6 +1,6 @@
 from agentlab.config import DOCS_DIR, GOLDEN_PATH
 from eval.data import load_golden
-from agentlab.rag.loaders import load_documents, split_documents
+from agentlab.rag_agent.rag.loaders import load_documents, split_documents
 
 
 def test_golden_has_27_cases_and_4_unanswerable():

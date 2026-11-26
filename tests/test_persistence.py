@@ -11,8 +11,8 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.store.postgres import AsyncPostgresStore
 
 import agentlab.config as config
-from agentlab.agent.graph import build_graph
-from agentlab.tools.builtin import calculator
+from agentlab.rag_agent.graph import build_graph
+from agentlab.rag_agent.tools.builtin import calculator
 
 TEST_DB = os.getenv("TEST_DATABASE_URL") or config.DATABASE_URL
 

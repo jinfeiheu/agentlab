@@ -9,7 +9,7 @@ from langgraph.graph.message import add_messages
 from langgraph.types import Command
 from pydantic import BaseModel
 
-from agentlab.rag.loaders import format_docs
+from agentlab.rag_agent.rag.loaders import format_docs
 from agentlab.security.auth import UserContext
 
 MAX_STEPS = 6

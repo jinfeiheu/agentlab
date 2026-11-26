@@ -32,16 +32,16 @@ from eval.retrieval_metrics import (
     context_recall,
 )
 from eval.text_metrics import exact_match, token_f1
-from agentlab.agent.graph import build_graph
+from agentlab.rag_agent.graph import build_graph
 from agentlab.observability.metrics import MetricsRecorder, Usage, usage_from_message
 from agentlab.models import build_chat_model
-from agentlab.rag.loaders import build_inmemory_retriever, format_docs
-from agentlab.rag.retrieval import (
+from agentlab.rag_agent.rag.loaders import build_inmemory_retriever, format_docs
+from agentlab.rag_agent.rag.retrieval import (
     build_pgvector_hybrid_retriever,
     build_reranker,
     extract_sources,
 )
-from agentlab.tools.builtin import calculator, make_search_tool, send_report
+from agentlab.rag_agent.tools.builtin import calculator, make_search_tool, send_report
 
 _REFUSAL_MARKERS = (
     "无法回答",

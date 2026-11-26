@@ -61,20 +61,20 @@ def _legacy_import_offenders(root: Path) -> list[str]:
 
 
 def test_core_modules_import_under_package():
-    from agentlab.agent.context import estimate_tokens
-    from agentlab.agent.graph import build_graph
-    from agentlab.agent.memory import MemoryItem
-    from agentlab.agent.multi_agent import build_multi_agent_graph
+    from agentlab.rag_agent.context import estimate_tokens
+    from agentlab.rag_agent.graph import build_graph
+    from agentlab.rag_agent.memory import MemoryItem
+    from agentlab.rag_agent.multi_agent import build_multi_agent_graph
     from agentlab.models import build_chat_model
     from agentlab.observability.metrics import MetricsRecorder
     from agentlab.observability.tracing import span
-    from agentlab.rag.ingest import build_vector_store
-    from agentlab.rag.loaders import load_documents
-    from agentlab.rag.retrieval import rrf_fuse
+    from agentlab.rag_agent.rag.ingest import build_vector_store
+    from agentlab.rag_agent.rag.loaders import load_documents
+    from agentlab.rag_agent.rag.retrieval import rrf_fuse
     from agentlab.security.auth import UserContext
     from agentlab.security.guard import redact_pii
-    from agentlab.tools.builtin import calculator
-    from agentlab.tools.tickets import get_ticket
+    from agentlab.rag_agent.tools.builtin import calculator
+    from agentlab.rag_agent.tools.tickets import get_ticket
 
     assert callable(build_graph)
     assert calculator.name == "calculator"
@@ -113,13 +113,13 @@ def test_no_legacy_root_imports():
 
 
 def test_entrypoint_modules_import():
-    import agentlab.cli
+    import agentlab.rag_agent.cli
     import agentlab.api.app
-    import agentlab.mcp.client
-    import agentlab.mcp.knowledge_server
-    import agentlab.mcp.utils_server
+    import agentlab.rag_agent.mcp.client
+    import agentlab.rag_agent.mcp.knowledge_server
+    import agentlab.rag_agent.mcp.utils_server
 
-    assert callable(agentlab.cli.main)
+    assert callable(agentlab.rag_agent.cli.main)
     assert callable(agentlab.api.app.serve)
     assert agentlab.api.app.app is not None
 
@@ -129,10 +129,11 @@ def test_console_scripts_declared():
 
     data = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
     scripts = data["project"]["scripts"]
-    assert scripts["agentlab"] == "agentlab.cli:main"
+    assert scripts["agentlab"] == "agentlab.rag_agent.cli:main"
+    assert scripts["agentlab-rag"] == "agentlab.rag_agent.cli:main"
     assert scripts["agentlab-api"] == "agentlab.api.app:serve"
-    assert scripts["agentlab-mcp-knowledge"] == "agentlab.mcp.knowledge_server:main"
-    assert scripts["agentlab-mcp-utils"] == "agentlab.mcp.utils_server:main"
+    assert scripts["agentlab-mcp-knowledge"] == "agentlab.rag_agent.mcp.knowledge_server:main"
+    assert scripts["agentlab-mcp-utils"] == "agentlab.rag_agent.mcp.utils_server:main"
 
 
 def test_static_index_exists():

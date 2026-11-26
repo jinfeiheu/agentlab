@@ -4,7 +4,7 @@ import argparse
 
 from mcp.server.fastmcp import FastMCP
 
-from agentlab.tools.builtin import calculator as _calculator
+from agentlab.rag_agent.tools.builtin import calculator as _calculator
 
 mcp = FastMCP("agentlab-utils")
 

@@ -8,13 +8,13 @@ from langgraph.graph import START, MessagesState, StateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.runtime import Runtime
 
-from agentlab.agent.context import (
+from agentlab.rag_agent.context import (
     estimate_tokens,
     plan_compaction,
     summarize_messages,
     trim_messages,
 )
-from agentlab.agent.memory import load_profile, save_episode
+from agentlab.rag_agent.memory import load_profile, save_episode
 from agentlab.config import CONTEXT_MAX_TOKENS, ENABLE_AUTO_MEMORY
 from agentlab.security.auth import UserContext
 from agentlab.security.guard import asecurity_wrapper, ensure_tools_allowed, security_wrapper

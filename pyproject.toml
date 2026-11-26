@@ -24,10 +24,11 @@ dependencies = [
 ]
 
 [project.scripts]
-agentlab = "agentlab.cli:main"
+agentlab = "agentlab.rag_agent.cli:main"
+agentlab-rag = "agentlab.rag_agent.cli:main"
 agentlab-api = "agentlab.api.app:serve"
-agentlab-mcp-knowledge = "agentlab.mcp.knowledge_server:main"
-agentlab-mcp-utils = "agentlab.mcp.utils_server:main"
+agentlab-mcp-knowledge = "agentlab.rag_agent.mcp.knowledge_server:main"
+agentlab-mcp-utils = "agentlab.rag_agent.mcp.utils_server:main"
 agentlab-analytics = "agentlab.analytics.cli:main"
 
 [dependency-groups]

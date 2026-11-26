@@ -1,6 +1,6 @@
 """MCP 多 server 与 transport 配置测试。"""
 
-import agentlab.mcp.client as mcp_client
+import agentlab.rag_agent.mcp.client as mcp_client
 
 
 def test_build_mcp_config_stdio(monkeypatch):
@@ -8,10 +8,10 @@ def test_build_mcp_config_stdio(monkeypatch):
     config = mcp_client.build_mcp_config()
     assert set(config) == {"agentlab", "utils"}
     assert config["agentlab"]["transport"] == "stdio"
-    assert "agentlab.mcp.knowledge_server" in " ".join(
+    assert "agentlab.rag_agent.mcp.knowledge_server" in " ".join(
         config["agentlab"]["args"]
     )
-    assert "agentlab.mcp.utils_server" in " ".join(config["utils"]["args"])
+    assert "agentlab.rag_agent.mcp.utils_server" in " ".join(config["utils"]["args"])
     assert config["agentlab"]["cwd"]
 
 

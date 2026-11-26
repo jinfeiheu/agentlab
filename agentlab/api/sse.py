@@ -9,7 +9,7 @@ from contextlib import aclosing
 
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 
-from agentlab.agent.context import compress_tool_content
+from agentlab.rag_agent.context import compress_tool_content
 from agentlab.api.services import _post_turn_memory, _prepare_thread
 from agentlab.security.guard import StreamingRedactor, redact_pii
 

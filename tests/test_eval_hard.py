@@ -13,7 +13,7 @@ from eval.retrieval_metrics import (
 )
 from eval.run_eval import evaluate, write_report
 from eval.text_metrics import exact_match, token_f1
-from agentlab.rag.loaders import load_documents, split_documents
+from agentlab.rag_agent.rag.loaders import load_documents, split_documents
 from tests.fakes import FakeRetriever, FakeRunnable
 
 

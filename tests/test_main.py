@@ -8,7 +8,7 @@ from langchain_core.messages import (
     ToolMessage,
 )
 
-from agentlab import cli as main
+from agentlab.rag_agent import cli as main
 from agentlab.security.auth import UserContext
 
 

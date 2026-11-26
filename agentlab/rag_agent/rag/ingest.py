@@ -8,7 +8,7 @@ from langchain_postgres import PGVector
 
 from agentlab.config import DATABASE_URL, DOCS_DIR, PG_COLLECTION
 from agentlab.models import build_embeddings
-from agentlab.rag.loaders import load_documents, split_documents
+from agentlab.rag_agent.rag.loaders import load_documents, split_documents
 
 EMBEDDING_DIM = 1024
 

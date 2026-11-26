@@ -5,7 +5,7 @@ from pathlib import Path
 
 from langchain_core.documents import Document
 
-from agentlab.tools.builtin import calculator, make_search_tool
+from agentlab.rag_agent.tools.builtin import calculator, make_search_tool
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _SUBPROCESS_ENV = {
@@ -42,7 +42,7 @@ def test_calculator_rejects_nested_huge_power():
     code = """
 import resource
 resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024, 512 * 1024 * 1024))
-from agentlab.tools.builtin import calculator
+from agentlab.rag_agent.tools.builtin import calculator
 print(calculator.invoke({"expression": "((9**999)**999)**999"}))
 """
     result = subprocess.run(

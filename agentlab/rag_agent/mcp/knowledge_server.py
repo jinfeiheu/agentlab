@@ -5,8 +5,8 @@ import argparse
 from mcp.server.fastmcp import FastMCP
 
 from agentlab.config import DOCS_DIR
-from agentlab.rag.loaders import format_docs, load_documents, split_documents
-from agentlab.rag.retrieval import build_pgvector_hybrid_retriever
+from agentlab.rag_agent.rag.loaders import format_docs, load_documents, split_documents
+from agentlab.rag_agent.rag.retrieval import build_pgvector_hybrid_retriever
 
 mcp = FastMCP("agentlab-mcp")
 _retriever = None

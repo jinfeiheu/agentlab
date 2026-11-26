@@ -128,7 +128,7 @@ def build_pgvector_hybrid_retriever(
     from agentlab.config import DATABASE_URL, DOCS_DIR, PG_COLLECTION
     from langchain_postgres import PGVector
     from agentlab.models import build_embeddings
-    from agentlab.rag.loaders import load_documents, split_documents
+    from agentlab.rag_agent.rag.loaders import load_documents, split_documents
 
     docs_dir = docs_dir or DOCS_DIR
     collection_name = collection_name or PG_COLLECTION

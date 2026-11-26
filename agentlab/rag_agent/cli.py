@@ -15,7 +15,7 @@ from langgraph.store.memory import InMemoryStore
 from langgraph.types import Command
 
 from agentlab.security.auth import DEMO_USERS, UserContext
-from agentlab.agent.context import compress_tool_content
+from agentlab.rag_agent.context import compress_tool_content
 from agentlab.config import (
     DOCS_DIR,
     EMBED_DIMS,
@@ -26,8 +26,8 @@ from agentlab.config import (
     RERANK_ENABLED,
     RERANK_MODEL,
 )
-from agentlab.agent.graph import SYSTEM_PROMPT, build_graph, build_simple_graph
-from agentlab.agent.memory import (
+from agentlab.rag_agent.graph import SYSTEM_PROMPT, build_graph, build_simple_graph
+from agentlab.rag_agent.memory import (
     maybe_extract_and_save,
     messages_used_save_memory,
     save_memory,
@@ -35,12 +35,12 @@ from agentlab.agent.memory import (
     summarize_and_save,
 )
 from agentlab.models import build_chat_model, build_embeddings
-from agentlab.agent.multi_agent import build_multi_agent_graph
-from agentlab.rag.loaders import build_inmemory_retriever
-from agentlab.rag.retrieval import build_pgvector_hybrid_retriever, build_reranker
+from agentlab.rag_agent.multi_agent import build_multi_agent_graph
+from agentlab.rag_agent.rag.loaders import build_inmemory_retriever
+from agentlab.rag_agent.rag.retrieval import build_pgvector_hybrid_retriever, build_reranker
 from agentlab.security.guard import StreamingRedactor, check_input, redact_pii
-from agentlab.tools.tickets import get_ticket
-from agentlab.tools.builtin import calculator, make_search_tool, send_report
+from agentlab.rag_agent.tools.tickets import get_ticket
+from agentlab.rag_agent.tools.builtin import calculator, make_search_tool, send_report
 from agentlab.observability.tracing import setup_tracing, shutdown_tracing
 
 HELP = """命令:

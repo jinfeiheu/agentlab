@@ -9,8 +9,8 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.store.memory import InMemoryStore
 
-from agentlab.agent.graph import build_graph
-from agentlab.agent.memory import (
+from agentlab.rag_agent.graph import build_graph
+from agentlab.rag_agent.memory import (
     detect_memory_candidate,
     maybe_extract_and_save,
     messages_used_save_memory,
@@ -31,14 +31,14 @@ from agentlab.config import (
     USE_MCP,
 )
 from agentlab.models import build_chat_model, build_embeddings
-from agentlab.rag.loaders import build_inmemory_retriever
-from agentlab.rag.retrieval import (
+from agentlab.rag_agent.rag.loaders import build_inmemory_retriever
+from agentlab.rag_agent.rag.retrieval import (
     build_pgvector_hybrid_retriever,
     build_reranker,
 )
 from agentlab.security.guard import redact_pii
-from agentlab.tools.builtin import calculator, make_search_tool, send_report
-from agentlab.tools.tickets import get_ticket
+from agentlab.rag_agent.tools.builtin import calculator, make_search_tool, send_report
+from agentlab.rag_agent.tools.tickets import get_ticket
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +81,7 @@ async def build_services() -> Services:
     """构建真实依赖;USE_DB=true 时改用 Postgres checkpointer 与 Store。"""
     retriever = None
     if USE_MCP:
-        from agentlab.mcp.client import load_mcp_tools
+        from agentlab.rag_agent.mcp.client import load_mcp_tools
 
         mcp_tools = await load_mcp_tools()
         missing = {"search_docs", "calculator"} - {
