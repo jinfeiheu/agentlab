@@ -76,7 +76,7 @@
 
 - 两个 server：`agentlab` 暴露 search_docs/list_sources/doc_stats，`utils` 暴露 calculator/word_count；全部公共、只读。
 - 默认 stdio：客户端拉起子进程，不占端口；需要多客户端/跨机器时用 streamable HTTP，8811/8812。
-- `mcp_client.py` 用 MultiServerMCPClient 聚合两个 server，能发现 5 个工具并调用。
+- `agentlab/rag_agent/mcp/client.py` 用 MultiServerMCPClient 聚合两个 server，能发现 5 个工具并调用。
 - `USE_MCP=true` 时 API 用 MCP 的 search_docs+calculator，缺一个就启动失败；ticket/memory/send_report 留在本地。
 - 权限边界：MCP 不暴露私有数据、不暴露写操作；HTTP 模式必须自己加 TLS、Bearer/OAuth 和限流。
 - 什么时候不该用 MCP：只有一个工具、只在一个进程里调用时，本地函数更简单、更快、类型更安全。
