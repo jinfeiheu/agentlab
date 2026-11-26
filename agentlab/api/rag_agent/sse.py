@@ -10,7 +10,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 
 from agentlab.rag_agent.context import compress_tool_content
 from agentlab.api.redaction import redact_value
-from agentlab.api.services import _post_turn_memory, _prepare_thread
+from agentlab.api.rag_agent.services import _post_turn_memory, _prepare_thread
 from agentlab.api.streaming import sse
 from agentlab.security.guard import StreamingRedactor, redact_pii
 

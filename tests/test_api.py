@@ -12,14 +12,14 @@ from langchain_core.messages import (
 )
 
 import agentlab.api.app as api
-import agentlab.api.services as api_services
+import agentlab.api.rag_agent.services as api_services
 from agentlab.api.app import create_app
-from agentlab.api.services import (
+from agentlab.api.rag_agent.services import (
     _maybe_extract_memory,
     _pending_tool_calls,
     _post_turn_memory,
 )
-from agentlab.api.sse import _chat_events, _tool_events
+from agentlab.api.rag_agent.sse import _chat_events, _tool_events
 from agentlab.security.auth import UserContext, sign_token
 from tests.fakes import RecordingGraph, auth_client, bearer, fake_services
 
