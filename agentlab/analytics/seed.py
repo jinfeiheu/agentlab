@@ -167,6 +167,20 @@ _DDL = (
         ADD COLUMN IF NOT EXISTS model_id TEXT
     """,
     """
+    CREATE TABLE IF NOT EXISTS analytics.analytics_audit_steps (
+        request_id TEXT NOT NULL,
+        step_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        sql TEXT,
+        row_count INT,
+        duration_ms INT,
+        failure_class TEXT,
+        reason TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (request_id, step_id)
+    )
+    """,
+    """
     CREATE OR REPLACE VIEW analytics.customers_safe
     WITH (security_invoker = true) AS
     SELECT customer_id, tenant_id, region, segment, created_at
@@ -188,7 +202,7 @@ _TRUNCATE = """
 TRUNCATE analytics.customers, analytics.products, analytics.orders,
          analytics.order_items, analytics.refunds, analytics.subscriptions,
          analytics.usage_events, analytics.tickets, analytics.metric_catalog,
-         analytics.analytics_audit
+         analytics.analytics_audit, analytics.analytics_audit_steps
 RESTART IDENTITY CASCADE
 """
 

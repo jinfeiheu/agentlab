@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-26 — 多步计划执行（实验）
+
+- `--plan` SQL-in-plan：规划器产出带 SQL 的 DAG，sqlguard 校验后由 `execute_plan` 并行执行。
+- 单步失败尝试一次 repair；重复 SQL 去重；每步写 `analytics_audit_steps`。
+- 10 条 smoke：task_success 0.9、P95 27.8s、¥0.0106/题；比 single 慢，不作为默认。
+- GitHub Actions：离线 `uv sync --all-groups` + `pytest -q`。
+
 ## 2026-11-25 — Analytics Agent v1.0
 
 - 多租户 Text-to-SQL 单 Agent：understand → clarify/refuse → plan_sql → validate_sql → estimate_cost → approve → execute → repair → answer。

@@ -50,12 +50,14 @@ async def ask(
     tenant_id: str = ANALYTICS_TENANT_ID,
     session_id: str = "cli",
     user_id: str = "cli-user",
+    multi_step: bool = False,
 ) -> dict:
     """执行一轮问答；CLI 会话进程内复用。"""
     graph = build_analytics_graph(
         build_chat_model(temperature=0),
         AnalyticsDB(),
         model_router=build_model_router(temperature=0),
+        multi_step=multi_step,
     )
     sessions = AnalyticsSessionStore()
     state = await run_analytics_question(
@@ -84,6 +86,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--json", action="store_true", help="输出完整 JSON 状态"
     )
+    parser.add_argument(
+        "--plan",
+        action="store_true",
+        help="启用多步计划执行（SQL-in-plan）",
+    )
     return parser
 
 
@@ -95,6 +102,7 @@ def main() -> None:
                 args.question,
                 tenant_id=args.tenant,
                 session_id=args.session,
+                multi_step=args.plan,
             )
         )
     except Exception as exc:  # noqa: BLE001 - CLI 统一可读错误

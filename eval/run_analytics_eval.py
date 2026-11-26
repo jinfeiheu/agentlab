@@ -328,7 +328,9 @@ def annotate_record(record: dict) -> dict:
         "refuse": "refuse",
     }.get(actual, "none")
     record["plan_valid"] = (
-        bool(record.get("sql")) and not record.get("sql_error")
+        bool(record.get("sql"))
+        and not record.get("sql_error")
+        and not record.get("plan_error")
         if expected == "answer"
         else None
     )
@@ -380,7 +382,7 @@ def process_metrics(records: list[dict]) -> dict:
         name: sum(
             1 for record in records if record.get("route") == name
         )
-        for name in ("single", "multi")
+        for name in ("single", "multi", "plan")
     }
     classes = {
         name: {"count": 0, "recovered": 0, "recovery_rate": 0.0}
@@ -701,6 +703,9 @@ async def run_eval(
                 "replan_count": int(
                     state.get("replan_count", 0) or 0
                 ),
+                "plan_error": state.get("plan_error", ""),
+                "plan_result": state.get("plan_result") or {},
+                "step_audits": state.get("step_audits") or [],
                 "estimated_cost": float(
                     state.get("estimated_cost", 0.0) or 0.0
                 ),
@@ -746,6 +751,9 @@ async def run_eval(
                 "critic_evaluations": 0,
                 "critic_rejections": 0,
                 "replan_count": 0,
+                "plan_error": "",
+                "plan_result": {},
+                "step_audits": [],
                 "estimated_cost": 0.0,
                 "rejected": False,
                 "sql": "",
@@ -794,6 +802,11 @@ def main() -> None:
         help="Agent 架构；auto 按问题复杂度路由",
     )
     parser.add_argument(
+        "--plan",
+        action="store_true",
+        help="启用多步计划执行（SQL-in-plan）",
+    )
+    parser.add_argument(
         "--output", type=Path, default=None, help="完整 JSON 报告输出路径"
     )
     parser.add_argument(
@@ -818,7 +831,16 @@ def main() -> None:
     model = build_chat_model(temperature=0)
     model_router = build_model_router(temperature=0)
     db = AnalyticsDB()
-    if args.arch == "multi":
+    arch = args.arch
+    if args.plan:
+        arch = "plan"
+        graph = build_analytics_graph(
+            model,
+            db,
+            model_router=model_router,
+            multi_step=True,
+        )
+    elif args.arch == "multi":
         graph = build_multi_agent_analytics_graph(model, db)
     elif args.arch == "auto":
         single_graph = build_analytics_graph(
@@ -832,7 +854,7 @@ def main() -> None:
         graph = build_analytics_graph(
             model, db, model_router=model_router
         )
-    report = asyncio.run(run_eval(items, graph, arch=args.arch))
+    report = asyncio.run(run_eval(items, graph, arch=arch))
     print(json.dumps(report["summary"], ensure_ascii=False, indent=2))
     for record in report["records"]:
         if not record["matched"]:

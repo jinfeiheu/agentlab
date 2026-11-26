@@ -574,6 +574,7 @@ async def test_run_eval_records_arch_and_route():
     assert report["summary"]["route_decisions"] == {
         "single": 0,
         "multi": 1,
+        "plan": 0,
     }
 
 

@@ -71,7 +71,7 @@ async def execute_plan(
             budget.consume(steps=1)
             try:
                 result = await db.execute(
-                    step.goal,
+                    step.sql or step.goal,
                     tenant_id,
                     max_rows=200,
                     timeout_ms=5000,

@@ -54,7 +54,7 @@
 ## 7. 取舍与限制
 
 - 合成数仓、固定 seed；golden 绑定 scale=1.0，换数仓要重算 expected_result。
-- 多步计划库已实现（planning/verification/executor），默认图仍是单 SQL；`unnecessary_steps` 只统计重复 SQL。
+- 多步计划已接线（`--plan` SQL-in-plan + executor + 逐步骤审计），但 10 条 smoke 只有 0.9、P95 27.8s，比 single 慢且贵，因此不设为默认。
 - 会话表是进程内实现；生产要换 Redis/Postgres。
 - retry/circuit breaker 已实现但默认未接线；高并发下依赖模型供应商配额。
 - 图表是模型返回 Vega-Lite spec，页面只做简单条形图兜底。

@@ -17,5 +17,7 @@ versions:
       结果行（最多 20 行）：$rows
       总行数：$row_count
       是否截断：$truncated
+      多步骤结果摘要（为空表示单步）：
+      $plan_summary
 
       $json_answer

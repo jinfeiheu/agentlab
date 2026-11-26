@@ -26,6 +26,51 @@ ON CONFLICT (request_id) DO UPDATE SET
 """
 
 
+_INSERT_STEP = """
+INSERT INTO analytics.analytics_audit_steps
+    (request_id, step_id, status, sql, row_count, duration_ms,
+     failure_class, reason)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+ON CONFLICT (request_id, step_id) DO UPDATE SET
+    status = EXCLUDED.status,
+    sql = EXCLUDED.sql,
+    row_count = EXCLUDED.row_count,
+    duration_ms = EXCLUDED.duration_ms,
+    failure_class = EXCLUDED.failure_class,
+    reason = EXCLUDED.reason
+"""
+
+
+async def write_step_audit(
+    *,
+    request_id: str,
+    step_id: str,
+    status: str,
+    sql: str = "",
+    row_count: int = 0,
+    duration_ms: float = 0.0,
+    failure_class: str | None = None,
+    reason: str = "",
+) -> None:
+    """写入单步审计；sql/reason 先做 PII 脱敏。"""
+    async with await psycopg.AsyncConnection.connect(
+        ANALYTICS_AUDIT_DATABASE_URL
+    ) as conn:
+        await conn.execute(
+            _INSERT_STEP,
+            (
+                request_id,
+                step_id,
+                status,
+                redact_pii(sql),
+                int(row_count),
+                int(round(duration_ms)),
+                failure_class,
+                redact_pii(reason),
+            ),
+        )
+
+
 async def write_audit(
     *,
     request_id: str,

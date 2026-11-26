@@ -6,8 +6,8 @@ from pydantic import BaseModel, Field
 
 _JSON_PLAN = (
     '请只输出 JSON：{"question": "...", "steps": [{"id": "s1", '
-    '"goal": "...", "kind": "query", "depends_on": [], '
-    '"metric_ids": [], "expected_output": "..."}], '
+    '"goal": "...", "kind": "query", "sql": "单条 PostgreSQL SELECT", '
+    '"depends_on": [], "metric_ids": [], "expected_output": "..."}], '
     '"assumptions": [], "clarification_needed": false, '
     '"max_steps": 6, "version": "v1"}'
 )
@@ -19,6 +19,7 @@ class PlanStep(BaseModel):
     id: str
     goal: str
     kind: str = "query"
+    sql: str = ""
     depends_on: list[str] = Field(default_factory=list)
     metric_ids: list[str] = Field(default_factory=list)
     expected_output: str = ""
@@ -58,6 +59,8 @@ def _plan_prompt(question: str, catalog: str) -> str:
 把问题拆成 1 到 6 个步骤，每步只做一件事。
 可用工具：query、verify、clarify、chart。
 每个步骤必须有 expected_output（验收条件）；依赖用 depends_on 引用已有 step id。
+query 步骤必须提供完整 sql：只允许单条 SELECT，必须带 tenant_id 过滤，
+时间范围左闭右开；禁止写操作、系统表和多条语句。
 禁止生成环、重复 id、未知指标或未知工具。
 
 可用 schema / 指标目录：
@@ -110,6 +113,7 @@ def validate_plan(
     allowed_tools: set[str],
     allowed_metrics: set[str],
     budget,
+    require_sql: bool = False,
 ) -> PlanValidation:
     """校验 DAG、工具/指标 allowlist、预算和每步验收条件。"""
     if not plan.steps:
@@ -137,6 +141,10 @@ def validate_plan(
             return PlanValidation(
                 False,
                 f"步骤 {step.id} 缺少 expected_output（验收条件）",
+            )
+        if require_sql and step.kind == "query" and not step.sql.strip():
+            return PlanValidation(
+                False, f"步骤 {step.id} 缺少 SQL"
             )
         for dep in step.depends_on:
             if dep not in ids:

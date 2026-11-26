@@ -113,5 +113,22 @@
     "avg_cost_lte_0_02": true,
     "load_20_error_lte_1pct": true,
     "load_50_error_lte_1pct": true
+  },
+  "plan_mode_10": {
+    "count": 10,
+    "task_success": 0.9,
+    "execution_accuracy": 0.9,
+    "permission_violation": 0,
+    "pii_leaks": 0,
+    "p50_latency_ms": 10739.588146971073,
+    "p95_latency_ms": 27781.565142970067,
+    "avg_cost_estimate": 0.0105808,
+    "avg_tokens": 5290.4,
+    "avg_step_count": 1.0,
+    "route_decisions": {
+      "single": 0,
+      "multi": 0,
+      "plan": 10
+    }
   }
 }

@@ -18,6 +18,7 @@
 | 越权 | 0 | `permission_violation`、`analytics_audit` |
 | PII 泄露 | 0 | `pii_leaks`、日志/trace 抽查 |
 | 审计覆盖 | 100% 公共入口 | `analytics_audit.request_id` |
+| 步骤审计 | plan 模式每步一行 | `analytics_audit_steps` |
 | Critic 拦截率 | 有数据 | multi A/B 报告 |
 
 ### 最近压测（Direct graph，DeepSeek，auto-approve）
@@ -40,6 +41,7 @@
 | 审计缺口 | 入口请求数 - audit 行数 > 0 | P1 | 查 audit DB 写权限/连接 |
 | 审批拒绝异常升高 | `status=rejected` 突增 | P2 | 查 EXPLAIN 阈值与查询模式 |
 | 预算拒绝升高 | `status=budget` 突增 | P2 | 查 prompt/模型回归与循环 repair |
+| plan 模式变慢/变贵 | P95 > 20s 或成本 > ¥0.02 | P2 | 检查步骤数/重复 SQL/repair；必要时退回 single |
 
 ## 4. 故障处理
 

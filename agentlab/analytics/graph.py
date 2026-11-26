@@ -13,15 +13,25 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 from pydantic import BaseModel, Field
 
-from agentlab.analytics.audit import write_audit
+from agentlab.analytics.audit import write_audit, write_step_audit
+from agentlab.analytics.budget import Budget
 from agentlab.analytics.catalog import (
     ALLOWED_RELATIONS,
     METRIC_BRIEF,
+    METRICS,
     SCHEMA_BRIEF,
 )
 from agentlab.analytics.db import AnalyticsDBError
+from agentlab.analytics.executor import StepResult, execute_plan
+from agentlab.analytics.planning import (
+    AnalyticsPlan,
+    PlanBudget,
+    _JSON_PLAN,
+    validate_plan,
+)
 from agentlab.analytics.reliability import run_with_timeout
 from agentlab.analytics.sql_guard import validate_sql
+from agentlab.analytics.verification import verify_step
 from agentlab.analytics.versioning import (
     BudgetExceeded,
     CostBudget,
@@ -79,6 +89,12 @@ class AnalyticsState(TypedDict, total=False):
     model_ids: dict[str, str]
     budget_spent: float
     budget_exceeded: bool
+    plan: dict
+    plan_result: dict
+    step_audits: list[dict]
+    plan_error: str
+    agent_steps: int
+    duplicate_queries: int
 
 
 class Intent(BaseModel):
@@ -122,6 +138,21 @@ def _summarize(mapping: dict | None) -> str | None:
     return ",".join(
         f"{key}={value}" for key, value in sorted(mapping.items())
     )
+
+
+def _plan_summary(state: AnalyticsState) -> str:
+    plan = state.get("plan") or {}
+    if not plan:
+        return ""
+    lines = []
+    for audit in state.get("step_audits") or []:
+        lines.append(
+            f"{audit.get('step_id')}: {audit.get('status')} "
+            f"rows={audit.get('row_count', 0)} "
+            f"{audit.get('failure_class') or ''} "
+            f"{audit.get('reason') or ''}".strip()
+        )
+    return "\n".join(lines)
 
 
 def _after_understand(state: AnalyticsState) -> str:
@@ -193,6 +224,7 @@ def build_analytics_graph(
     prompt_registry: PromptRegistry | None = None,
     model_router=None,
     budget: CostBudget | None = None,
+    multi_step: bool = False,
 ):
     """构建单 Agent 基线图；模型、prompt registry 和预算都可注入。"""
     registry = prompt_registry or default_prompt_registry()
@@ -226,6 +258,12 @@ def build_analytics_graph(
         meta = _record(state, spec)
         meta["budget_spent"] = spent
         return result, meta
+
+    def after_understand(state: AnalyticsState) -> str:
+        route = _after_understand(state)
+        if route == "plan_sql" and multi_step:
+            return "plan"
+        return route
 
     async def understand(state: AnalyticsState):
         if state.get("intent"):
@@ -264,6 +302,48 @@ def build_analytics_graph(
 
     def refuse(state: AnalyticsState):
         return {"answer": "根据现有数据无法回答该问题。", "clarification": ""}
+
+    async def plan_steps(state: AnalyticsState):
+        with span("analytics.plan", tenant_id=state.get("tenant_id", "")):
+            plan, meta = await _invoke(
+                "plan",
+                AnalyticsPlan,
+                state,
+                {
+                    "catalog": f"{SCHEMA_BRIEF}\n\n{METRIC_BRIEF}",
+                    "question": state.get("question", ""),
+                    "json_plan": _JSON_PLAN,
+                },
+                "plan",
+            )
+        validation = validate_plan(
+            plan,
+            {"query", "verify", "clarify", "chart"},
+            {metric[0] for metric in METRICS},
+            PlanBudget(max_steps=6),
+            require_sql=True,
+        )
+        if not validation.valid:
+            return {"plan_error": validation.reason, **meta}
+        steps = []
+        for step in plan.steps:
+            if step.kind == "query":
+                checked = validate_sql(step.sql, ALLOWED_RELATIONS)
+                if not checked.allowed:
+                    return {
+                        "plan_error": f"{step.id}: {checked.reason}",
+                        **meta,
+                    }
+                step = step.model_copy(
+                    update={"sql": checked.normalized_sql}
+                )
+            steps.append(step)
+        normalized = plan.model_copy(update={"steps": steps})
+        return {
+            "plan": normalized.model_dump(),
+            "plan_error": "",
+            **meta,
+        }
 
     async def plan_sql(state: AnalyticsState):
         with span(
@@ -381,6 +461,204 @@ def build_analytics_graph(
             "sql_error": "",
         }
 
+    async def run_plan(state: AnalyticsState):
+        plan = AnalyticsPlan.model_validate(state.get("plan") or {})
+        budget = Budget(
+            max_steps=plan.max_steps,
+            max_concurrency=3,
+            deadline_s=30.0,
+        )
+        seen_sql: dict[str, str] = {}
+        execution_steps = []
+        duplicate_map: dict[str, str] = {}
+        for step in plan.steps:
+            key = " ".join((step.sql or step.goal).split()).lower()
+            if key in seen_sql:
+                duplicate_map[step.id] = seen_sql[key]
+            else:
+                seen_sql[key] = step.id
+                execution_steps.append(step)
+        execution_plan = plan.model_copy(
+            update={"steps": execution_steps}
+        )
+        with span(
+            "analytics.execute_plan",
+            steps=len(execution_plan.steps),
+            duplicates=len(duplicate_map),
+        ):
+            result = await execute_plan(
+                execution_plan,
+                db,
+                budget,
+                max_concurrency=3,
+                tenant_id=state.get("tenant_id", ""),
+                request_id=state.get("request_id"),
+            )
+        step_results = dict(result.steps)
+        repair_meta: dict = {}
+
+        async def repair_step(step, failed):
+            nonlocal repair_meta
+            try:
+                repaired, meta = await _invoke(
+                    "repair",
+                    SQLPlan,
+                    state,
+                    {
+                        "question": state.get("question", ""),
+                        "sql": step.sql,
+                        "sql_error": failed.error or "执行失败",
+                        "schema_brief": SCHEMA_BRIEF,
+                        "metric_brief": METRIC_BRIEF,
+                        "json_sql": _JSON_SQL,
+                    },
+                    "repair",
+                )
+            except Exception as exc:  # noqa: BLE001 - 单步修复失败保留其他结果
+                return StepResult(step.id, "error", error=str(exc))
+            repair_meta.update(meta)
+            validation = validate_sql(repaired.sql, ALLOWED_RELATIONS)
+            if not validation.allowed:
+                return StepResult(
+                    step.id, "error", error=validation.reason
+                )
+            step.sql = validation.normalized_sql
+            try:
+                query_result = await db.execute(
+                    step.sql,
+                    state.get("tenant_id", ""),
+                    max_rows=ANALYTICS_MAX_ROWS,
+                    timeout_ms=ANALYTICS_STATEMENT_TIMEOUT,
+                )
+            except AnalyticsDBError as exc:
+                return StepResult(step.id, "error", error=str(exc))
+            return StepResult(
+                step.id,
+                "success",
+                result={
+                    "columns": query_result.columns,
+                    "rows": query_result.rows,
+                    "row_count": query_result.row_count,
+                    "truncated": query_result.truncated,
+                    "duration_ms": query_result.duration_ms,
+                },
+                duration_ms=query_result.duration_ms,
+            )
+
+        for step in plan.steps:
+            failed = step_results.get(step.id)
+            if failed and failed.status == "error":
+                step_results[step.id] = await repair_step(step, failed)
+
+        for duplicate_id, first_id in duplicate_map.items():
+            first_result = step_results.get(first_id)
+            if first_result is not None:
+                step_results[duplicate_id] = StepResult(
+                    duplicate_id,
+                    first_result.status,
+                    first_result.result,
+                    first_result.error,
+                    first_result.duration_ms,
+                )
+
+        step_audits = []
+        for step in plan.steps:
+            step_result = step_results.get(step.id)
+            payload = (
+                dict(step_result.result)
+                if step_result and step_result.result
+                else {}
+            )
+            if step_result and step_result.error:
+                payload["error"] = step_result.error
+            verdict = verify_step(step, payload)
+            failure_class = (
+                verdict.failure_class.value
+                if verdict.failure_class is not None
+                else None
+            )
+            reason = verdict.reason
+            if step.id in duplicate_map:
+                reason = f"重复 SQL，复用 {duplicate_map[step.id]}"
+            audit = {
+                "step_id": step.id,
+                "status": (
+                    step_result.status if step_result else "skipped"
+                ),
+                "sql": step.sql,
+                "row_count": int(payload.get("row_count", 0) or 0),
+                "duration_ms": (
+                    step_result.duration_ms if step_result else 0.0
+                ),
+                "failure_class": failure_class,
+                "reason": reason,
+            }
+            step_audits.append(audit)
+            await write_step_audit(
+                request_id=state.get("request_id") or "",
+                step_id=step.id,
+                status=audit["status"],
+                sql=step.sql,
+                row_count=audit["row_count"],
+                duration_ms=audit["duration_ms"],
+                failure_class=failure_class,
+                reason=reason,
+            )
+        successes = [
+            step
+            for step in plan.steps
+            if step_results.get(step.id)
+            and step_results[step.id].status == "success"
+            and step_results[step.id].result
+        ]
+        primary = successes[0] if successes else None
+        primary_result = (
+            dict(step_results[primary.id].result) if primary else {}
+        )
+        errors = [
+            step_result.error
+            for step_result in step_results.values()
+            if step_result.error
+        ]
+        success = bool(step_results) and all(
+            item.status == "success" for item in step_results.values()
+        )
+        partial = any(
+            item.status == "success" for item in step_results.values()
+        ) and any(
+            item.status != "success" for item in step_results.values()
+        )
+        plan_result = {
+            "success": success,
+            "partial": partial,
+            "errors": errors,
+            "duration_ms": result.duration_ms,
+            "steps": {
+                step_id: {
+                    "status": step_result.status,
+                    "row_count": (step_result.result or {}).get(
+                        "row_count", 0
+                    ),
+                    "error": step_result.error,
+                }
+                for step_id, step_result in step_results.items()
+            },
+        }
+        return {
+            "plan_result": plan_result,
+            "result": primary_result,
+            "step_audits": step_audits,
+            "agent_steps": len(plan.steps),
+            "duplicate_queries": len(duplicate_map),
+            "sql": primary.sql if primary else "",
+            "sql_error": (
+                ""
+                if successes
+                else (errors[0] if errors else "计划执行失败")
+            ),
+            **repair_meta,
+        }
+
     async def repair(state: AnalyticsState):
         with span(
             "analytics.repair",
@@ -422,6 +700,7 @@ def build_analytics_graph(
             "rows": rows[:20],
             "row_count": result.get("row_count", 0),
             "truncated": result.get("truncated", False),
+            "plan_summary": _plan_summary(state),
             "json_answer": _JSON_ANSWER,
         }
         with span(
@@ -457,6 +736,8 @@ def build_analytics_graph(
     builder.add_node("understand", understand)
     builder.add_node("clarify", clarify)
     builder.add_node("refuse", refuse)
+    builder.add_node("plan", plan_steps)
+    builder.add_node("execute_plan", run_plan)
     builder.add_node("plan_sql", plan_sql)
     builder.add_node("validate_sql", validate_sql_node)
     builder.add_node("estimate_cost", estimate_cost)
@@ -469,11 +750,30 @@ def build_analytics_graph(
     builder.add_edge(START, "understand")
     builder.add_conditional_edges(
         "understand",
-        _after_understand,
-        {"clarify": "clarify", "refuse": "refuse", "plan_sql": "plan_sql"},
+        after_understand,
+        {
+            "clarify": "clarify",
+            "refuse": "refuse",
+            "plan": "plan",
+            "plan_sql": "plan_sql",
+        },
     )
     builder.add_edge("clarify", END)
     builder.add_edge("refuse", END)
+    builder.add_conditional_edges(
+        "plan",
+        lambda state: (
+            "execute_plan"
+            if not state.get("plan_error")
+            else "plan_sql"
+        ),
+        {"execute_plan": "execute_plan", "plan_sql": "plan_sql"},
+    )
+    builder.add_conditional_edges(
+        "execute_plan",
+        lambda state: "answer" if state.get("result") else "fail",
+        {"answer": "answer", "fail": "fail"},
+    )
     builder.add_edge("plan_sql", "validate_sql")
     builder.add_conditional_edges(
         "validate_sql",
@@ -552,6 +852,12 @@ async def run_analytics_question(
         "model_ids": {},
         "budget_spent": 0.0,
         "budget_exceeded": False,
+        "plan": {},
+        "plan_result": {},
+        "step_audits": [],
+        "plan_error": "",
+        "agent_steps": 0,
+        "duplicate_queries": 0,
     }
     try:
         state = await graph.ainvoke(payload, config or {})

@@ -55,6 +55,7 @@ GRANT SELECT (customer_id, tenant_id, region, segment, created_at)
   ON analytics.customers TO $READER;
 -- 审计表只由应用写角色访问，只读角色不暴露。
 REVOKE ALL ON analytics.analytics_audit FROM $READER;
+REVOKE ALL ON analytics.analytics_audit_steps FROM $READER;
 SQL
 
 echo "Analytics DB 就绪："

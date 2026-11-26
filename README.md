@@ -72,6 +72,9 @@ agentlab/
 │   │   ├── sql_guard.py     # sqlglot 只读守卫与 allowlist
 │   │   ├── db.py            # 只读连接、租户上下文、EXPLAIN 成本
 │   │   ├── seed.py          # 合成数仓、指标口径、RLS
+│   │   ├── planning.py      # 多步计划/校验
+│   │   ├── verification.py  # 步骤验收、失败分类、重规划
+│   │   ├── executor.py      # 并行步骤执行、预算与取消
 │   │   ├── versioning.py    # prompt/model 版本 registry + 请求预算
 │   │   ├── session.py       # 多轮会话上下文与压缩
 │   │   ├── cli.py           # agentlab-analytics
@@ -471,6 +474,18 @@ Analytics Agent 是独立于 RAG 主线的第二个作品：面向多租户数�
 - auto 只把 1/50 路由到 multi，成功率和 single 相同；它保留为路由实验入口，暂不设为默认。
 - multi 保留为可选深分析模式：适合需要显式 Scout/Critic 轨迹、或未来接入多步计划执行的场景。
 
+### 多步计划（实验）
+
+`--plan` / `agentlab-analytics --plan` 启用 SQL-in-plan 路径：
+
+- 规划器产出 1–6 步 DAG，每个 query 步骤带 SQL；
+- 校验 DAG/工具/指标/验收条件，SQL 再过 sqlguard；
+- `execute_plan` 并行执行独立步骤，单步失败会尝试一次 repair；
+- 重复 SQL 自动去重，避免重复查询；
+- 每步写 `analytics_audit_steps`（status/sql/row_count/failure_class/reason）。
+
+10 条 smoke：`task_success=0.9`、P95 27.8s、¥0.0106/题、越权/PII 0。比 single 慢且贵，**不作为默认**；保留为复杂多指标问题的实验路径。
+
 ### API / CLI / 多轮会话
 
 - `agentlab-api` 提供 `/analytics` 页面、`POST /analytics/chat`、`POST /analytics/chat/stream`、`POST /analytics/cancel`。
@@ -482,6 +497,7 @@ Analytics Agent 是独立于 RAG 主线的第二个作品：面向多租户数�
 
 ```bash
 uv run agentlab-analytics "tenant_a 在 2026 年 9 月的 GMV 是多少？" --tenant tenant_a
+uv run agentlab-analytics "收入与退款率分别是多少？" --tenant tenant_a --plan
 uv run agentlab-api
 # 打开 http://localhost:8000/analytics
 ```
