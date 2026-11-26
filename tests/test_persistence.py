@@ -114,7 +114,7 @@ async def test_postgres_store_isolates_users():
 
 async def test_build_services_persists_across_instances(monkeypatch):
     """USE_DB=true 时服务使用 Postgres;新实例仍能读到旧会话。"""
-    import agentlab.api.services as api
+    import agentlab.api.rag_agent.services as api
     from tests.fakes import FakeRetriever
 
     monkeypatch.setattr(api, "USE_DB", True)

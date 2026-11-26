@@ -140,3 +140,41 @@ def test_static_index_exists():
     import agentlab.api.app as app_module
 
     assert (Path(app_module.STATIC_DIR) / "rag_agent.html").is_file()
+
+
+_MOVED_MODULES = (
+    "agentlab.agent",
+    "agentlab.rag",
+    "agentlab.tools",
+    "agentlab.mcp",
+    "agentlab.cli",
+    "agentlab.api.sse",
+    "agentlab.api.services",
+    "agentlab.api.schemas",
+)
+
+
+def _moved_import_offenders(root: Path) -> list[str]:
+    offenders: list[str] = []
+    for path in root.rglob("*.py"):
+        if any(part in {".venv", ".git", "__pycache__"} for part in path.parts):
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                modules = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.level == 0:
+                modules = [node.module or ""]
+            else:
+                continue
+            for module in modules:
+                if any(
+                    module == moved or module.startswith(moved + ".")
+                    for moved in _MOVED_MODULES
+                ):
+                    offenders.append(f"{path}: {module}")
+    return sorted(set(offenders))
+
+
+def test_no_legacy_moved_imports():
+    assert _moved_import_offenders(PROJECT_ROOT) == []
