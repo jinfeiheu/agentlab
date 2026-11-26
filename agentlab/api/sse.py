@@ -1,7 +1,6 @@
 """SSE 事件、文本/来源提取与流式生成器。"""
 
 import asyncio
-import json
 import logging
 import re
 import time
@@ -10,28 +9,15 @@ from contextlib import aclosing
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 
 from agentlab.rag_agent.context import compress_tool_content
+from agentlab.api.redaction import redact_value
 from agentlab.api.services import _post_turn_memory, _prepare_thread
+from agentlab.api.streaming import sse
 from agentlab.security.guard import StreamingRedactor, redact_pii
 
 _SOURCE_RE = re.compile(r"\[来源:([^\]]+)\]")
 _TOOL_RESULT_CHARS = 500
 
 logger = logging.getLogger(__name__)
-
-
-def sse(payload: dict) -> str:
-    """把一个事件编码成 SSE data 帧。"""
-    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-
-
-def _refusal_events(message: str):
-    """把输入拒绝包装成与正常流一致的 token + done 事件。"""
-
-    async def events():
-        yield sse({"type": "token", "text": message})
-        yield sse({"type": "done", "sources": []})
-
-    return events()
 
 
 def _content_text(content) -> str:
@@ -136,17 +122,6 @@ async def _get_interrupt(graph, config) -> dict | None:
     return _interrupt_payload(state)
 
 
-def _redact_value(value):
-    """递归脱敏工具参数/结果里的字符串,前端展示不出现原始 PII。"""
-    if isinstance(value, str):
-        return redact_pii(value)
-    if isinstance(value, dict):
-        return {key: _redact_value(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_redact_value(item) for item in value]
-    return value
-
-
 def _tool_events(message) -> list[dict]:
     """把一条消息转换成 tool_call / tool_result 事件。"""
     events: list[dict] = []
@@ -156,7 +131,7 @@ def _tool_events(message) -> list[dict]:
                 "type": "tool_call",
                 "id": call.get("id") or "",
                 "name": call.get("name", ""),
-                "args": _redact_value(call.get("args", {})),
+                "args": redact_value(call.get("args", {})),
             }
         )
     if isinstance(message, ToolMessage) or getattr(message, "type", None) == "tool":

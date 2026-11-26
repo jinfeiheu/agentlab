@@ -3,26 +3,28 @@
 import asyncio
 import inspect
 import logging
-import time
 import uuid
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from langgraph.types import Command
 
-from agentlab.security.auth import (
-    UserContext,
-    login as authenticate,
-    tenant_for_user,
-    verify_token,
+from agentlab.api.auth_schemas import LoginRequest, LoginResponse
+from agentlab.api.deps import (
+    RateLimiter,
+    get_analytics_services,
+    get_current_user,
+    get_services,
+    get_thread_lock,
 )
+from agentlab.api.redaction import redact_value
+from agentlab.api.streaming import _refusal_events
+from agentlab.security.auth import UserContext, login as authenticate
 from agentlab.config import RATE_LIMIT_PER_MINUTE, REQUEST_TIMEOUT
 from agentlab.api.analytics import (
     AnalyticsServices,
-    _redact_value,
     analytics_events,
     build_analytics_services,
 )
@@ -35,8 +37,6 @@ from agentlab.api.schemas import (
     AnalyticsChatResponse,
     ChatRequest,
     ChatResponse,
-    LoginRequest,
-    LoginResponse,
     ResumeRequest,
 )
 from agentlab.api.services import (
@@ -51,7 +51,6 @@ from agentlab.api.sse import (
     _extract_sources,
     _get_interrupt,
     _has_interrupt,
-    _refusal_events,
 )
 from agentlab.security.guard import check_input, redact_pii
 from agentlab.observability.tracing import setup_tracing, shutdown_tracing
@@ -61,84 +60,14 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class RateLimiter:
-    """按 user_id 的滑动窗口限流。"""
-
-    limit: int
-    window_seconds: float = 60.0
-    hits: dict[str, list[float]] = field(default_factory=dict)
-
-    def allow(self, user_id: str) -> bool:
-        """记录一次请求;超过窗口上限返回 False。"""
-        now = time.monotonic()
-        recent = [
-            stamp
-            for stamp in self.hits.get(user_id, [])
-            if now - stamp < self.window_seconds
-        ]
-        if len(recent) >= self.limit:
-            self.hits[user_id] = recent
-            return False
-        recent.append(now)
-        self.hits[user_id] = recent
-        return True
-
-
-
-def get_current_user(
-    authorization: str | None = Header(default=None),
-) -> UserContext:
-    """从 Bearer token 解析用户身份;失败统一 401。"""
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="missing bearer token")
-    token = authorization[len("Bearer ") :].strip()
-    try:
-        user_id = verify_token(token)
-    except ValueError as exc:
-        raise HTTPException(status_code=401, detail="invalid token") from exc
-    return UserContext(
-        user_id=user_id, tenant_id=tenant_for_user(user_id)
-    )
-
-
-def get_services(request: Request) -> Services:
-    """从 app.state 取服务集合;启动失败时统一 503。"""
-    services = request.app.state.services
-    if services is None:
-        raise HTTPException(
-            status_code=503,
-            detail=getattr(request.app.state, "startup_error", "服务未就绪"),
-        )
-    return services
-
-
-def get_analytics_services(request: Request) -> AnalyticsServices:
-    """从 app.state 取 Analytics 服务；未初始化时 503。"""
-    services = request.app.state.analytics
-    if services is None:
-        raise HTTPException(status_code=503, detail="analytics 未就绪")
-    return services
-
-
-def get_thread_lock(app: FastAPI, thread_id: str) -> asyncio.Lock:
-    """同一 thread 的请求串行执行,避免 checkpoint 状态交错。"""
-    locks = app.state.thread_locks
-    lock = locks.get(thread_id)
-    if lock is None:
-        lock = asyncio.Lock()
-        locks[thread_id] = lock
-    return lock
-
-
 def _analytics_response(state: dict) -> AnalyticsChatResponse:
     result = state.get("result") or {}
     return AnalyticsChatResponse(
         answer=redact_pii(str(state.get("answer") or "")),
         sql=redact_pii(str(state.get("sql") or "")),
         columns=result.get("columns") or [],
-        rows=_redact_value(result.get("rows") or []),
-        chart_spec=_redact_value(state.get("chart_spec")),
+        rows=redact_value(result.get("rows") or []),
+        chart_spec=redact_value(state.get("chart_spec")),
         audit_id=str(state.get("request_id") or ""),
         clarification=redact_pii(
             str(state.get("clarification") or "")

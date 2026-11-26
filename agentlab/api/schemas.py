@@ -3,19 +3,6 @@
 from pydantic import BaseModel
 
 
-class LoginRequest(BaseModel):
-    """登录请求。"""
-
-    username: str
-    password: str
-
-
-class LoginResponse(BaseModel):
-    """登录响应。"""
-
-    token: str
-
-
 class ChatRequest(BaseModel):
     """一轮对话请求。"""
 

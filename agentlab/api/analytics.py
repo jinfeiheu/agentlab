@@ -13,7 +13,8 @@ from agentlab.analytics.graph import (
 )
 from agentlab.analytics.session import AnalyticsSessionStore
 from agentlab.analytics.versioning import build_model_router
-from agentlab.api.sse import sse
+from agentlab.api.redaction import redact_value
+from agentlab.api.streaming import sse
 from agentlab.models import build_chat_model
 from agentlab.security.guard import redact_pii
 
@@ -52,16 +53,6 @@ def build_analytics_services() -> AnalyticsServices:
         graph=graph,
         sessions=AnalyticsSessionStore(),
     )
-
-
-def _redact_value(value):
-    if isinstance(value, str):
-        return redact_pii(value)
-    if isinstance(value, dict):
-        return {key: _redact_value(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_redact_value(item) for item in value]
-    return value
 
 
 def _step_summary(node: str, data: dict) -> dict:
@@ -204,8 +195,8 @@ async def analytics_events(
             "answer": redact_pii(str(state.get("answer") or "")),
             "sql": redact_pii(str(state.get("sql") or "")),
             "columns": result.get("columns") or [],
-            "rows": _redact_value(result.get("rows") or []),
-            "chart_spec": _redact_value(state.get("chart_spec")),
+            "rows": redact_value(result.get("rows") or []),
+            "chart_spec": redact_value(state.get("chart_spec")),
             "audit_id": request_id,
             "clarification": redact_pii(
                 str(state.get("clarification") or "")

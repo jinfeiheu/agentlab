@@ -2,11 +2,10 @@
 
 
 def test_schemas_and_services_are_split():
+    from agentlab.api.auth_schemas import LoginRequest, LoginResponse
     from agentlab.api.schemas import (
         ChatRequest,
         ChatResponse,
-        LoginRequest,
-        LoginResponse,
         ResumeRequest,
     )
     from agentlab.api.services import Services, build_services
@@ -28,7 +27,11 @@ def test_streaming_and_thread_helpers_are_split():
         _prepare_thread,
     )
     from agentlab.api.sse import _chat_events, _tool_events
+    from agentlab.api.redaction import redact_value
+    from agentlab.api.streaming import sse
 
+    assert sse({"type": "done"}) == 'data: {"type": "done"}\n\n'
+    assert redact_value({"email": "a@b.com"}) == {"email": "[EMAIL]"}
     assert callable(_chat_events)
     assert callable(_tool_events)
     assert callable(_pending_tool_calls)
