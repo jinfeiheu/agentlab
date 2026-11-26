@@ -3,6 +3,8 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from eval.run_analytics_eval import (
     FAILURE_CLASSES,
     actual_outcome,
@@ -24,6 +26,18 @@ from eval.run_analytics_eval import (
 GOLDEN = (
     Path(__file__).resolve().parents[1] / "eval" / "analytics_golden.jsonl"
 )
+
+
+@pytest.fixture(autouse=True)
+def _stub_audit(monkeypatch):
+    """CI 没有 Postgres；评测测试不应依赖审计写库。"""
+
+    async def noop(**kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "agentlab.analytics.graph.write_audit", noop, raising=False
+    )
 
 
 def test_golden_set_size_and_distribution():
