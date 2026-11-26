@@ -1,21 +1,13 @@
-"""Analytics API 的服务集合与 SSE 计划事件。"""
+"""Analytics API 的 SSE 计划事件。"""
 
 import asyncio
 import time
-from dataclasses import dataclass
 
 from agentlab.analytics.audit import write_audit
-from agentlab.analytics.db import AnalyticsDB
-from agentlab.analytics.graph import (
-    _audit_status,
-    _summarize,
-    build_analytics_graph,
-)
+from agentlab.analytics.graph import _audit_status, _summarize
 from agentlab.analytics.session import AnalyticsSessionStore
-from agentlab.analytics.versioning import build_model_router
 from agentlab.api.redaction import redact_value
 from agentlab.api.streaming import sse
-from agentlab.models import build_chat_model
 from agentlab.security.guard import redact_pii
 
 DEFAULT_STEPS = [
@@ -27,32 +19,6 @@ DEFAULT_STEPS = [
     "execute",
     "answer",
 ]
-
-
-@dataclass
-class AnalyticsServices:
-    """Analytics 图与会话表；测试可注入 fake。"""
-
-    graph: object
-    sessions: AnalyticsSessionStore
-    db_check: object = None
-
-    async def aclose(self) -> None:
-        return None
-
-
-def build_analytics_services() -> AnalyticsServices:
-    """生产依赖：单 Agent 图 + 进程内会话。"""
-    model = build_chat_model(temperature=0)
-    graph = build_analytics_graph(
-        model,
-        AnalyticsDB(),
-        model_router=build_model_router(temperature=0),
-    )
-    return AnalyticsServices(
-        graph=graph,
-        sessions=AnalyticsSessionStore(),
-    )
 
 
 def _step_summary(node: str, data: dict) -> dict:

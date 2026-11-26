@@ -1,4 +1,4 @@
-"""API 请求与响应模型。"""
+"""Analytics API 请求与响应模型。"""
 
 from pydantic import BaseModel
 

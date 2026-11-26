@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 
 from fastapi import FastAPI, Header, HTTPException, Request
 
-from agentlab.api.analytics import AnalyticsServices
+from agentlab.api.analytics.services import AnalyticsServices
 from agentlab.api.rag_agent.services import Services
 from agentlab.security.auth import UserContext, tenant_for_user, verify_token
 

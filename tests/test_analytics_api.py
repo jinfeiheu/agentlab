@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from agentlab.api.analytics import AnalyticsServices
+from agentlab.api.analytics.services import AnalyticsServices
 from agentlab.api.app import create_app
 from agentlab.analytics.session import AnalyticsSessionStore
 from agentlab.security.auth import sign_token
@@ -21,7 +21,7 @@ def _stub_audit(monkeypatch):
         "agentlab.analytics.graph.write_audit", noop, raising=False
     )
     monkeypatch.setattr(
-        "agentlab.api.analytics.write_audit", noop, raising=False
+        "agentlab.api.analytics.events.write_audit", noop, raising=False
     )
 
 

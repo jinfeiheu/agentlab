@@ -15,7 +15,7 @@ from agentlab.analytics.graph import (
 from agentlab.analytics.reliability import AnalyticsTimeoutError
 from agentlab.analytics.session import AnalyticsSessionStore
 from agentlab.analytics.versioning import CostBudget
-from agentlab.api import analytics as analytics_api
+from agentlab.api.analytics import events as analytics_events_module
 
 
 class ScriptedModel:
@@ -82,7 +82,7 @@ def audit_calls(monkeypatch):
         graph_module, "write_audit", fake, raising=False
     )
     monkeypatch.setattr(
-        analytics_api, "write_audit", fake, raising=False
+        analytics_events_module, "write_audit", fake, raising=False
     )
     return calls
 
@@ -186,7 +186,7 @@ async def test_sse_disconnect_writes_cancelled_audit(audit_calls):
 
     events = [
         event
-        async for event in analytics_api.analytics_events(
+        async for event in analytics_events_module.analytics_events(
             graph,
             payload,
             {},
@@ -227,7 +227,7 @@ async def test_sse_final_writes_success_audit(audit_calls):
 
     events = [
         event
-        async for event in analytics_api.analytics_events(
+        async for event in analytics_events_module.analytics_events(
             graph, payload, {}, sessions, "user_alice", "s1"
         )
     ]
