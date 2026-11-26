@@ -139,4 +139,4 @@ def test_console_scripts_declared():
 def test_static_index_exists():
     import agentlab.api.app as app_module
 
-    assert (Path(app_module.STATIC_DIR) / "index.html").is_file()
+    assert (Path(app_module.STATIC_DIR) / "rag_agent.html").is_file()

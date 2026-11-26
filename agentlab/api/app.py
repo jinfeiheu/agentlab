@@ -113,7 +113,7 @@ def create_app(
 
     @app.get("/", include_in_schema=False)
     def index() -> FileResponse:
-        return FileResponse(STATIC_DIR / "index.html")
+        return FileResponse(STATIC_DIR / "rag_agent.html")
 
     @app.get("/analytics", include_in_schema=False)
     def analytics_page() -> FileResponse:
